@@ -1,0 +1,10 @@
+# Basis points: 2_000 = 20%, 1_000 = 10%.
+[[scenario]]
+name = "baseline"
+chi_bps = 2000
+beta_bps = 1000
+omega_bps = 5000
+theta_bps = 10000
+provider_rebate_cap_wei = 0
+reserve_target_wei = 0
+reserve_kappa_bps = 0

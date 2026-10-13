@@ -1,0 +1,9 @@
+[package]
+name = "tlm-report"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+parquet = "53"
+chrono = "0.4"

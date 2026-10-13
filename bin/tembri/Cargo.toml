@@ -1,0 +1,18 @@
+[package]
+name = "tembri"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "tembri"
+path = "src/main.rs"
+
+[dependencies]
+tlm-ingest = { path = "../../crates/ingest" }
+
+serde_json = "1"
+parquet = "53"
+tlm-classify = { path = "../../crates/classify" }
+tlm-model = { path = "../../crates/model" }
+tlm-report = { path = "../../crates/report" }

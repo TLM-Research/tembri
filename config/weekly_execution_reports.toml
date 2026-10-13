@@ -1,0 +1,12 @@
+# One-command execution-data and activity-tip report workflow.
+# Use only complete UTC dates.  The runner refuses a date with fewer than the
+# configured minimum block count, which prevents accidental partial-day reports.
+
+from_block = 26108000
+to_block = 26159000
+dates = "2026-10-03,2026-10-04,2026-10-05,2026-10-06,2026-10-07,2026-10-08,2026-10-09"
+
+data_dir = "data/raw"
+output_dir = "/share/tlm_proj/report"
+datasets = "blocks,transactions,logs"
+min_blocks_per_day = 6500

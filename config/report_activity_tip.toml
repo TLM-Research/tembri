@@ -1,0 +1,7 @@
+# Reproducible activity-tip report settings.
+# period is either "available" or one UTC day, e.g. "2025-07-01".
+kind = "activity_tip"
+source_dir = "data/raw/xatu"
+output_dir = "/share/tlm_proj/report"
+period = "available"
+required_datasets = ["blocks", "transactions", "logs"]

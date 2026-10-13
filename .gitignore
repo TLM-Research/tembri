@@ -1,0 +1,4 @@
+# Local source cache and generated artifacts; never stage these in TLM-Research.
+data/
+target/
+reports/

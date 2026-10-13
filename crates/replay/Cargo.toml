@@ -1,0 +1,8 @@
+[package]
+name = "tlm-replay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tlm-model = { path = "../model" }
