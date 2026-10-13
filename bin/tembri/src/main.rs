@@ -657,6 +657,7 @@ struct XatuBlock {
 struct BuilderStats {
     blocks: u64,
     txs: u64,
+    zero_tip_txs: u64,
     correlation_sum: f64,
     correlations: u64,
     tip_sum: f64,
@@ -889,6 +890,7 @@ fn activity_tip_xatu_report(plan: &tlm_report::ReportPlan, out: &PathBuf) -> Res
             let mut builder_points = Vec::with_capacity(txs.len());
             let mut builder_tip_sum = 0.0;
             let mut builder_position_sum = 0.0;
+            let mut builder_zero_tip_txs = 0u64;
             for tx in txs {
                 cumulative = cumulative.saturating_add(tx.gas_used);
                 if tx.tx_type >= 2 {
@@ -898,6 +900,9 @@ fn activity_tip_xatu_report(plan: &tlm_report::ReportPlan, out: &PathBuf) -> Res
                     }
                 }
                 let effective_tip = effective_tip(&tx, block.base_fee);
+                if effective_tip == 0 {
+                    builder_zero_tip_txs += 1;
+                }
                 let e = evidence.remove(&(number, tx.index)).unwrap_or_default();
                 let a = tlm_classify::classify_activity(
                     tx.selector.as_deref(),
@@ -945,6 +950,7 @@ fn activity_tip_xatu_report(plan: &tlm_report::ReportPlan, out: &PathBuf) -> Res
             let b = builders.entry(block.builder_signal).or_default();
             b.blocks += 1;
             b.txs += builder_points.len() as u64;
+            b.zero_tip_txs += builder_zero_tip_txs;
             b.tip_sum += builder_tip_sum;
             b.position_sum += builder_position_sum;
             if let Some(correlation) = pearson(&builder_points) {
@@ -986,7 +992,7 @@ fn activity_tip_xatu_report(plan: &tlm_report::ReportPlan, out: &PathBuf) -> Res
     }
     markdown.push_str(&format!("\nFee method: type-2+ effective tip = min(max priority fee, max fee − base fee); legacy transactions use gas price − base fee. Type-2+ transactions: {}; Xatu gas_price equal to max_fee: {} ({:.2}%).\n",fee_diagnostics.type2_or_newer,fee_diagnostics.gas_price_equals_max_fee,100.0*fee_diagnostics.gas_price_equals_max_fee as f64/fee_diagnostics.type2_or_newer.max(1) as f64));
     markdown.push_str("\nPrivate/public-flow columns require a public-mempool hash join. This Xatu execution-only run has no such join attached, so they are intentionally N/A; tip = 0 is a measured fee bucket, not a private-flow label.\n");
-    markdown.push_str("\n## Builder signal and within-block tip-position correlation\n\nThe builder signal is the block extra-data string, not a relay-verified builder identity. Correlation is the mean per-block Pearson correlation between effective tip (gwei/gas) and cumulative-gas position. Builders are sorted by observed block count.\n\n| Builder signal | Blocks | Block market share | Transactions | Mean tip (gwei/gas) | Mean position | Mean correlation |\n| --- | ---: | ---: | ---: | ---: | ---: | ---: |\n");
+    markdown.push_str("\n## Builder signal and within-block tip-position correlation\n\nThe builder signal is the block extra-data string, not a relay-verified builder identity. Correlation is the mean per-block Pearson correlation between effective tip (gwei/gas) and cumulative-gas position. Builders are sorted by observed block count.\n\n| Builder signal | Blocks | Block market share | Transactions | Zero-tip txs | Zero-tip share | Mean tip (gwei/gas) | Mean position | Mean correlation |\n| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
     let mut builder_rows: Vec<_> = builders.into_iter().collect();
     builder_rows.sort_by(|(left_name, left), (right_name, right)| {
         right
@@ -1003,10 +1009,12 @@ fn activity_tip_xatu_report(plan: &tlm_report::ReportPlan, out: &PathBuf) -> Res
             stats.correlation_sum / stats.correlations as f64
         };
         markdown.push_str(&format!(
-            "| {builder} | {} | {:.2}% | {} | {:.4} | {:.4} | {:.4} |\n",
+            "| {builder} | {} | {:.2}% | {} | {} | {:.2}% | {:.4} | {:.4} | {:.4} |\n",
             stats.blocks,
             100.0 * stats.blocks as f64 / blocks.len().max(1) as f64,
             stats.txs,
+            stats.zero_tip_txs,
+            100.0 * stats.zero_tip_txs as f64 / stats.txs.max(1) as f64,
             mean_tip,
             mean_position,
             correlation

@@ -2,90 +2,121 @@
 
 **T**ransaction, **E**thereum, **M**empool, **B**lock and **R**elay **I**ntelligence.
 
-Fast Rust tooling to follow Ethereum transactions from the mempool to the block: who sent them, by which route, what they do, how long they waited, which builder included them, where they landed and what they paid.
+Tembri is a Rust toolbox for reproducible Ethereum execution and mempool measurements. It fetches public data, assigns evidence-based activity labels, and produces Markdown reports on effective priority fees, transaction ordering, builder signals, and transaction lifecycle.
 
-It is built for the study of temporal liquidity: how the value of being included, and of being included early, changes with time and with market conditions. Every measure is kept with its time, so results can be read by position in the block, by time within the slot, by waiting time and by volatility regime.
+> Status: early development. The execution-data workflow and activity/tip reports are usable today; several richer data joins described below remain planned.
 
-Status: early development. 
+## What works today
 
-## What it covers
+- Fetch and cache public Xatu execution datasets: blocks, transactions, logs, traces, ERC-20 transfers, and native transfers.
+- Compute EIP-1559 effective priority fee correctly for type-2 and legacy transactions.
+- Produce activity-versus-tip and position reports for a day, a configured multi-day period, or all locally available blocks in a calendar month.
+- Classify evidence-backed activity categories, including native transfers, token transfers, Uniswap V2/V3 swaps, multi-pool arbitrage candidates, contract deployments, and other contract interactions.
+- Split results by normalized transaction position and early-block regions.
+- Report builder signals derived from block `extra_data`, including block share, transaction volume, zero-tip transactions, mean tip, mean position, and tip/position correlation.
+- Ingest public-mempool observation and admission files and derive conservative lifecycle outcomes: first seen, admitted, and sender/nonce replacement before admission.
 
-Each slot is the unit of analysis. For every slot, tembri joins:
+## Important boundaries
 
-| Layer | Data | What it adds |
-|---|---|---|
-| Mempool | Xatu `mempool_transaction`, Mempool Dumpster | first-seen time, public or private route, waiting time |
-| Relays and builders | MEV-Boost relay data APIs | builder bids over the slot, winning bid, value paid to the proposer |
-| Consensus | Xatu beacon data | proposer, block arrival time, missed slots |
-| Execution | Xatu blocks, transactions, receipts, logs | type, position in the block, priority fee, builder |
-| Payments *(planned)* | fee-recipient balance change, traces where available | direct payments to the builder, builder margin |
-
-## Time and volatility
-
-| Time axis | Measured as |
+| Topic | Current behaviour |
 |---|---|
-| Within the slot | first-seen time relative to slot start; builder bid times; block arrival |
-| Across slots | slots waited from first seen to inclusion; missed slots |
-| Calendar | hour of day, weekday |
-| Market regime *(planned)* | volatility cluster of the hour |
+| Builder identity | The current execution report uses the block `extra_data` signal. It is not a verified relay/builder identity join. |
+| Zero effective tip | Reported exactly as zero. It is a useful execution-data signal, but it does **not** by itself prove a transaction was private. |
+| Public/private flow | Requires a compatible mempool archive joined to execution data; this join is not yet included in the activity-tip report. |
+| Mempool lifecycle | Supported when observation and admission NDJSON inputs are supplied. Coverage depends on the archive and its schema. |
+| Activity labels | Evidence-based heuristics, not a complete protocol taxonomy. “Arbitrage candidate” is deliberately conservative. |
+| Traces and direct payments | Fetch support exists, but direct builder-payment and full trace-flow analysis are still planned. |
+| Market-volatility regimes | Planned. |
 
-Volatility is computed from on-chain prices: realised volatility of the main ETH/stablecoin pools over 5-minute and 1-hour windows, from their swap events, so no outside price feed is needed. Hours are grouped into clusters (calm, normal, active, stressed) by volatility, base fee and gas demand, and each report can be split by cluster.
+## Quick start
 
-## Classification
+Prerequisites: a recent stable Rust toolchain and enough local disk for cached Parquet data.
 
-Transactions are labelled in layers, cheapest first:
-
-1. **Known addresses** from `labels.toml` (routers, pools, exchanges, builders, known bots).
-2. **Events and function selectors**, with protocol rules drawn from Brontes.
-3. **Flow patterns** in each transaction's token-flow graph: cycles, payments to the fee recipient, placement next to a target.
-4. **Bytecode grouping** *(planned)*: contracts with the same code share a label; proxies resolve to their implementation.
-5. **Agent** *(planned)*: for contracts the rules cannot label, a language model reads sample transactions, decoded logs, token flows, verified source or ABI and function names, and proposes a label from a fixed list with its evidence.
-6. **Review** *(planned)*: accepted labels become rules, so the next run applies them at full speed.
-
-The agent never labels individual transactions; it only proposes rules. Every label records the layer that produced it. Reviewed labels accumulate into an open dataset of labelled contracts.
-
-## Outputs
-
-Per day, Markdown and Parquet reports of:
-
-- priority fee by position, by transaction type and by block region;
-- transaction types and zero-fee shares in the first 5, 10, 20 and 30 percent of block gas;
-- builder shares, ordering and bids;
-- public and private flow by type, region and builder;
-- waiting time from first seen to inclusion;
-- classification coverage at each layer.
-
-## Install
-
-```
-cargo install --git https://github.com/Duanyang-Guo/tembri
+```bash
+git clone https://github.com/TLM-Research/tembri.git
+cd tembri
+cargo run -p tembri -- --help
 ```
 
-## Usage
+The CLI currently exposes:
 
-```
-tembri day   --date 2026-08-01 --report reports/
-tembri range --from 2026-08-01 --to 2026-08-30 --report reports/
-tembri label --date 2026-08-01          # (planned) run the agent on unlabelled contracts
+```text
+tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|mempool-lifecycle|run-period|report>
 ```
 
-Each run checks its input schema and stops on implausible output, such as all-zero priority fees or undecoded builder names.
+## Run an execution report
 
-## Accuracy
+A reusable weekly configuration is provided in `config/weekly_execution_reports.toml`. Review its block range, dates, source URL, and output directory before running it.
 
-Labels are evaluated against a hand-labelled test set of transactions; precision and recall are reported per label and per layer.
+```bash
+cargo run -p tembri -- run-period \
+  --config config/weekly_execution_reports.toml
+```
+
+To analyse all locally available canonical blocks for a calendar month:
+
+```bash
+cargo run -p tembri -- report activity-tip-xatu \
+  --xatu data/raw/xatu \
+  --period 2026-08 \
+  --out reports/activity_tip_xatu_2026-08.md
+```
+
+For reproducible execution measurements, retain the cached input partitions and record the exact configuration alongside each report.
+
+## Run a lifecycle report
+
+Lifecycle measurement consumes newline-delimited JSON inputs for public-mempool observations and block admissions. Activity labels can be joined through an optional activity file.
+
+```bash
+cargo run -p tembri -- mempool-lifecycle \
+  --observations data/mempool/observations.ndjson \
+  --admissions data/mempool/admissions.ndjson \
+  --activities data/mempool/activities.ndjson \
+  --out reports/mempool_lifecycle.md
+```
+
+The classifier treats a transaction as dropped only when a later transaction with the same sender and nonce is seen before admission. It intentionally does not infer a drop merely because an observation disappears from an incomplete feed.
+
+## Report contents
+
+The activity-tip report includes:
+
+- effective priority fee in gwei/gas, using the EIP-1559 formula;
+- activity-type volume, zero-tip share, average tip, and position statistics;
+- average tip in position buckets, including 0–10%, 10–20%, 20–30%, and 30–60%;
+- early-block-region breakdowns;
+- builder-signal block share and zero-tip behaviour.
+
+The lifecycle report includes first-seen-to-admission delay where the inputs permit it, plus conservative replacement/drop outcomes.
+
+## Project layout
+
+| Path | Purpose |
+|---|---|
+| `bin/tembri` | Command-line application |
+| `crates/ingest` | Xatu, Cryo, RPC, and local input handling |
+| `crates/model` | Shared data model |
+| `crates/classify` | Evidence-based transaction/activity classification |
+| `crates/metrics` | Tip, position, and lifecycle metrics |
+| `crates/replay` | Mempool lifecycle reconstruction |
+| `crates/report` | Report selection and Markdown rendering |
+| `config/` | Reusable report configurations |
+| `adr/` | Architecture decision records |
 
 ## Roadmap
 
-- MCP server (`tembri mcp`): query slots, transactions, labels and daily reports from AI agents and MCP clients; local first, then a hosted read-only endpoint.
-- Volatility clusters and direct-payment measurement.
-- Labelled-contract dataset release.
-- Waiting-time models across slots.
+- Verified builder and relay joins, including bid and proposer-payment measurements.
+- Public/private-flow joins using compatible mempool archives.
+- Broader, evaluated activity taxonomy: liquidations, protocol-specific arbitrage, lending, bridges, NFT activity, and DeFi trading.
+- Direct-payment and trace-flow measurement.
+- Volatility and gas-demand regimes.
+- Label-quality evaluation set and versioned label datasets.
 
-## Acknowledgements
+## Data sources and acknowledgements
 
-Built on [Xatu](https://github.com/ethpandaops/xatu) public data. Classification rules draw on [Brontes](https://github.com/SorellaLabs/brontes) and [mev-inspect-py](https://github.com/flashbots/mev-inspect-py); the mempool-arrival method on [ZeroMEV](https://zeromev.org). Verified source from [Sourcify](https://sourcify.dev).
+Tembri currently uses [Xatu](https://github.com/ethpandaops/xatu) public data for its execution workflow. The project will draw on public relay, mempool, and verified-source datasets as their joins become available. Classification ideas are informed by [Brontes](https://github.com/SorellaLabs/brontes), [mev-inspect-py](https://github.com/flashbots/mev-inspect-py), and [ZeroMEV](https://zeromev.org).
 
 ## Licence
 
-Licensed under either of MIT ([LICENSE-MIT](LICENSE-MIT)) or Apache-2.0 ([LICENSE-APACHE](LICENSE-APACHE)), at your option.
+A project licence has not yet been selected.
