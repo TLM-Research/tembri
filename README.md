@@ -4,6 +4,8 @@
 
 Tembri is a Rust toolbox for reproducible Ethereum execution and mempool measurements. It fetches public data, assigns evidence-based activity labels, and produces Markdown reports on effective priority fees, transaction ordering, builder signals, and transaction lifecycle.
 
+**License:** [Apache-2.0](LICENSE).
+
 > Status: early development. The execution-data workflow and activity/tip reports are usable today; several richer data joins described below remain planned.
 
 ## What works today
@@ -117,6 +119,6 @@ The lifecycle report includes first-seen-to-admission delay where the inputs per
 
 Tembri currently uses [Xatu](https://github.com/ethpandaops/xatu) public data for its execution workflow. The project will draw on public relay, mempool, and verified-source datasets as their joins become available. Classification ideas are informed by [Brontes](https://github.com/SorellaLabs/brontes), [mev-inspect-py](https://github.com/flashbots/mev-inspect-py), and [ZeroMEV](https://zeromev.org).
 
-## Licence
+## License
 
-Licensed under [Apache License 2.0](LICENSE).
+Tembri is licensed under the [Apache License, Version 2.0](LICENSE).
