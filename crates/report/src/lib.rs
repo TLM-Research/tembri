@@ -83,8 +83,8 @@ fn select_calendar_blocks(
         for row in reader.get_row_iter(None).map_err(|e| e.to_string())? {
             let row = row.map_err(|e| e.to_string())?;
             let millis = row.get_timestamp_millis(1).map_err(|e| e.to_string())?;
-            let timestamp = DateTime::<Utc>::from_timestamp_millis(millis)
-                .ok_or("invalid block timestamp")?;
+            let timestamp =
+                DateTime::<Utc>::from_timestamp_millis(millis).ok_or("invalid block timestamp")?;
             if matches(timestamp.date_naive()) {
                 selected.insert(row.get_ulong(2).map_err(|e| e.to_string())?);
                 has_selected_block = true;
@@ -95,7 +95,9 @@ fn select_calendar_blocks(
         }
     }
     if selected.is_empty() {
-        return Err(format!("no canonical blocks for {label} in available partitions"));
+        return Err(format!(
+            "no canonical blocks for {label} in available partitions"
+        ));
     }
     Ok(ReportPlan {
         label,
@@ -133,13 +135,15 @@ pub fn plan(config: &ReportConfig) -> Result<ReportPlan, String> {
             block_numbers: None,
         }),
         ReportPeriod::UtcDay(day) => {
-            select_calendar_blocks(&partitions, config.period.label(), |observed| observed == *day)
+            select_calendar_blocks(&partitions, config.period.label(), |observed| {
+                observed == *day
+            })
         }
-        ReportPeriod::UtcMonth(month) => select_calendar_blocks(
-            &partitions,
-            config.period.label(),
-            |observed| observed.year() == month.year() && observed.month() == month.month(),
-        ),
+        ReportPeriod::UtcMonth(month) => {
+            select_calendar_blocks(&partitions, config.period.label(), |observed| {
+                observed.year() == month.year() && observed.month() == month.month()
+            })
+        }
     }
 }
 

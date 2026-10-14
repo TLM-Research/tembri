@@ -186,7 +186,6 @@ pub struct MempoolAdmission {
     pub block_number: BlockNumber,
 }
 
-
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MempoolActivity {
     pub hash: String,
@@ -197,7 +196,9 @@ pub struct MempoolActivity {
 pub enum MempoolLifecycleStatus {
     Admitted,
     /// Inferred only from a later distinct hash with the same sender and nonce.
-    DroppedBySender { replacement_hash: String },
+    DroppedBySender {
+        replacement_hash: String,
+    },
     PendingOrUnobserved,
 }
 

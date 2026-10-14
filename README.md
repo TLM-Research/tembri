@@ -119,4 +119,4 @@ Tembri currently uses [Xatu](https://github.com/ethpandaops/xatu) public data fo
 
 ## Licence
 
-A project licence has not yet been selected.
+Licensed under [Apache License 2.0](LICENSE).

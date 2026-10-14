@@ -2,11 +2,11 @@
 
 pub mod activity;
 pub mod lifecycle;
-pub use lifecycle::measure_mempool_lifecycle;
 pub use activity::{
     ActivityFilter, ClassifiedActivity, CompositionCounts, MempoolVisibility, PublicMempoolIndex,
     TipBucket,
 };
+pub use lifecycle::measure_mempool_lifecycle;
 
 use tlm_model::{Block, LabelConfig, MempoolSeen, Transaction, TxLabels};
 

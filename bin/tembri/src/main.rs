@@ -144,10 +144,11 @@ fn mempool_lifecycle(v: Vec<String>) -> ExitCode {
         eprintln!("Usage: tembri mempool-lifecycle --observations OBSERVATIONS.ndjson --admissions ADMISSIONS.ndjson --out REPORT.md [--rows-out LIFECYCLE.ndjson]");
         return ExitCode::from(2);
     };
-    let observations: Result<Vec<tlm_model::MempoolObservation>, _> = read_lines(&observations_path)
-        .iter()
-        .map(|line| serde_json::from_str(line))
-        .collect();
+    let observations: Result<Vec<tlm_model::MempoolObservation>, _> =
+        read_lines(&observations_path)
+            .iter()
+            .map(|line| serde_json::from_str(line))
+            .collect();
     let admissions: Result<Vec<tlm_model::MempoolAdmission>, _> = read_lines(&admissions_path)
         .iter()
         .map(|line| serde_json::from_str(line))
@@ -166,7 +167,10 @@ fn mempool_lifecycle(v: Vec<String>) -> ExitCode {
                 eprintln!("--activities must be NDJSON matching MempoolActivity");
                 return ExitCode::from(2);
             };
-            parsed.into_iter().map(|row| (row.hash.to_ascii_lowercase(), row.activity_type)).collect()
+            parsed
+                .into_iter()
+                .map(|row| (row.hash.to_ascii_lowercase(), row.activity_type))
+                .collect()
         }
         None => HashMap::new(),
     };
@@ -178,7 +182,11 @@ fn mempool_lifecycle(v: Vec<String>) -> ExitCode {
             return ExitCode::from(1);
         }
     }
-    let lifecycle_ndjson = match rows.iter().map(serde_json::to_string).collect::<Result<Vec<_>, _>>() {
+    let lifecycle_ndjson = match rows
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<Result<Vec<_>, _>>()
+    {
         Ok(lines) => lines.join("\n") + "\n",
         Err(error) => {
             eprintln!("cannot serialize lifecycle rows: {error}");
@@ -200,20 +208,39 @@ fn mempool_lifecycle(v: Vec<String>) -> ExitCode {
             tlm_model::MempoolLifecycleStatus::PendingOrUnobserved => pending.push(row),
         }
     }
-    let average_ms = |values: &[&tlm_model::MempoolLifecycle], field: fn(&tlm_model::MempoolLifecycle) -> u64| {
-        if values.is_empty() { None } else { Some(values.iter().map(|row| field(row) as f64).sum::<f64>() / values.len() as f64) }
+    let average_ms = |values: &[&tlm_model::MempoolLifecycle],
+                      field: fn(&tlm_model::MempoolLifecycle) -> u64| {
+        if values.is_empty() {
+            None
+        } else {
+            Some(values.iter().map(|row| field(row) as f64).sum::<f64>() / values.len() as f64)
+        }
     };
-    let average_optional_ms = |values: &[&tlm_model::MempoolLifecycle], field: fn(&tlm_model::MempoolLifecycle) -> Option<u64>| {
-        let values: Vec<_> = values.iter().filter_map(|row| field(row)).collect();
-        if values.is_empty() { None } else { Some(values.iter().map(|value| *value as f64).sum::<f64>() / values.len() as f64) }
-    };
+    let average_optional_ms =
+        |values: &[&tlm_model::MempoolLifecycle],
+         field: fn(&tlm_model::MempoolLifecycle) -> Option<u64>| {
+            let values: Vec<_> = values.iter().filter_map(|row| field(row)).collect();
+            if values.is_empty() {
+                None
+            } else {
+                Some(values.iter().map(|value| *value as f64).sum::<f64>() / values.len() as f64)
+            }
+        };
     let total = rows.len().max(1) as f64;
-    let display_seconds = |value: Option<f64>| value.map(|milliseconds| format!("{:.3}", milliseconds / 1_000.0)).unwrap_or_else(|| "N/A".into());
+    let display_seconds = |value: Option<f64>| {
+        value
+            .map(|milliseconds| format!("{:.3}", milliseconds / 1_000.0))
+            .unwrap_or_else(|| "N/A".into())
+    };
     let mut report = format!(
         "# Public mempool lifecycle\n\nTransactions: {}. All durations begin at the first public observation; they do not measure a wallet private submission time. A sender drop is inferred only when a later, distinct transaction with the same sender and nonce is observed before the original is admitted.\n\n| Outcome | Transactions | Share | Avg. observed residence (s) | Avg. admission delay (s) |\n| --- | ---: | ---: | ---: | ---: |\n",
         rows.len()
     );
-    for (name, group) in [("Admitted", &admitted), ("Dropped by sender (inferred)", &dropped), ("Pending / unobserved", &pending)] {
+    for (name, group) in [
+        ("Admitted", &admitted),
+        ("Dropped by sender (inferred)", &dropped),
+        ("Pending / unobserved", &pending),
+    ] {
         report.push_str(&format!(
             "| {name} | {} | {:.2}% | {} | {} |\n",
             group.len(),
@@ -227,14 +254,30 @@ fn mempool_lifecycle(v: Vec<String>) -> ExitCode {
         std::collections::BTreeMap::new();
     for row in &rows {
         activity_groups
-            .entry(activity_by_hash.get(&row.hash).cloned().unwrap_or_else(|| "unclassified".into()))
+            .entry(
+                activity_by_hash
+                    .get(&row.hash)
+                    .cloned()
+                    .unwrap_or_else(|| "unclassified".into()),
+            )
             .or_default()
             .push(row);
     }
     report.push_str("\n## Lifecycle profile by activity type\n\n| Activity type | Transactions | Admitted | Sender drops | Pending | Avg. admission delay (s) | Avg. observed residence (s) |\n| --- | ---: | ---: | ---: | ---: | ---: | ---: |\n");
     for (activity, group) in activity_groups {
-        let admitted_count = group.iter().filter(|row| matches!(row.status, tlm_model::MempoolLifecycleStatus::Admitted)).count();
-        let dropped_count = group.iter().filter(|row| matches!(row.status, tlm_model::MempoolLifecycleStatus::DroppedBySender { .. })).count();
+        let admitted_count = group
+            .iter()
+            .filter(|row| matches!(row.status, tlm_model::MempoolLifecycleStatus::Admitted))
+            .count();
+        let dropped_count = group
+            .iter()
+            .filter(|row| {
+                matches!(
+                    row.status,
+                    tlm_model::MempoolLifecycleStatus::DroppedBySender { .. }
+                )
+            })
+            .count();
         let pending_count = group.len() - admitted_count - dropped_count;
         report.push_str(&format!(
             "| {activity} | {} | {:.2}% | {:.2}% | {:.2}% | {} | {} |\n",
@@ -354,7 +397,6 @@ fn fetch_cryo(v: Vec<String>) -> ExitCode {
     }
 }
 
-
 fn run_period(v: Vec<String>) -> ExitCode {
     let Some(config_path) = arg(&v, "--config") else {
         eprintln!("Usage: tembri run-period --config CONFIG.toml");
@@ -367,9 +409,15 @@ fn run_period(v: Vec<String>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let required = |key: &str| config.get(key).cloned().ok_or_else(|| format!("missing {key}"));
+    let required = |key: &str| {
+        config
+            .get(key)
+            .cloned()
+            .ok_or_else(|| format!("missing {key}"))
+    };
     let (Ok(from), Ok(to), Ok(data_dir), Ok(output_dir), Ok(dates)) = (
-        required("from_block").and_then(|value| value.parse().map_err(|_| "invalid from_block".into())),
+        required("from_block")
+            .and_then(|value| value.parse().map_err(|_| "invalid from_block".into())),
         required("to_block").and_then(|value| value.parse().map_err(|_| "invalid to_block".into())),
         required("data_dir").map(PathBuf::from),
         required("output_dir").map(PathBuf::from),
@@ -378,7 +426,10 @@ fn run_period(v: Vec<String>) -> ExitCode {
         eprintln!("run-period requires from_block, to_block, data_dir, output_dir, and dates");
         return ExitCode::from(2);
     };
-    let names = config.get("datasets").map(String::as_str).unwrap_or("blocks,transactions,logs");
+    let names = config
+        .get("datasets")
+        .map(String::as_str)
+        .unwrap_or("blocks,transactions,logs");
     let datasets = match xatu_datasets(names) {
         Ok(datasets) => datasets,
         Err(error) => {
@@ -386,18 +437,25 @@ fn run_period(v: Vec<String>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let min_blocks = config.get("min_blocks_per_day")
+    let min_blocks = config
+        .get("min_blocks_per_day")
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(6_500);
     match tlm_ingest::fetch_xatu_range(from, to, &datasets, &data_dir) {
-        Ok((downloaded, cached)) => println!("Xatu ready: {downloaded} downloaded, {cached} cached"),
+        Ok((downloaded, cached)) => {
+            println!("Xatu ready: {downloaded} downloaded, {cached} cached")
+        }
         Err(error) => {
             eprintln!("Xatu fetch failed: {error}");
             return ExitCode::from(1);
         }
     }
     let source_dir = data_dir.join("xatu");
-    for date in dates.split(',').map(str::trim).filter(|date| !date.is_empty()) {
+    for date in dates
+        .split(',')
+        .map(str::trim)
+        .filter(|date| !date.is_empty())
+    {
         let period = match tlm_report::ReportPeriod::parse(date) {
             Ok(period) => period,
             Err(error) => {
@@ -405,19 +463,30 @@ fn run_period(v: Vec<String>) -> ExitCode {
                 return ExitCode::from(2);
             }
         };
-        let plan = match tlm_report::plan(&tlm_report::ReportConfig::activity_tip(&source_dir, &output_dir, period)) {
+        let plan = match tlm_report::plan(&tlm_report::ReportConfig::activity_tip(
+            &source_dir,
+            &output_dir,
+            period,
+        )) {
             Ok(plan) => plan,
             Err(error) => {
                 eprintln!("cannot plan {date}: {error}");
                 return ExitCode::from(1);
             }
         };
-        let block_count = plan.block_numbers.as_ref().map_or(0, |numbers| numbers.len());
+        let block_count = plan
+            .block_numbers
+            .as_ref()
+            .map_or(0, |numbers| numbers.len());
         if block_count < min_blocks {
-            eprintln!("refusing partial day {date}: only {block_count} blocks (minimum {min_blocks})");
+            eprintln!(
+                "refusing partial day {date}: only {block_count} blocks (minimum {min_blocks})"
+            );
             return ExitCode::from(1);
         }
-        let out = output_dir.join(format!("activity_tip_xatu_builder_{date}_eip1559_region_tip_v3.md"));
+        let out = output_dir.join(format!(
+            "activity_tip_xatu_builder_{date}_eip1559_region_tip_v3.md"
+        ));
         match activity_tip_xatu_report(&plan, &out) {
             Ok(()) => println!("wrote {}", out.display()),
             Err(error) => {
@@ -437,7 +506,8 @@ fn simple_config(path: &PathBuf) -> Result<HashMap<String, String>, String> {
         if line.is_empty() {
             continue;
         }
-        let (key, value) = line.split_once('=')
+        let (key, value) = line
+            .split_once('=')
             .ok_or_else(|| format!("line {} must be key = value", line_number + 1))?;
         let value = value.trim().trim_matches(char::from(34)).to_owned();
         values.insert(key.trim().to_owned(), value);
@@ -446,15 +516,18 @@ fn simple_config(path: &PathBuf) -> Result<HashMap<String, String>, String> {
 }
 
 fn xatu_datasets(names: &str) -> Result<Vec<tlm_ingest::XatuDataset>, String> {
-    names.split(',').map(|name| match name.trim() {
-        "blocks" => Ok(tlm_ingest::XatuDataset::Blocks),
-        "transactions" => Ok(tlm_ingest::XatuDataset::Transactions),
-        "logs" => Ok(tlm_ingest::XatuDataset::Logs),
-        "traces" => Ok(tlm_ingest::XatuDataset::Traces),
-        "erc20_transfers" => Ok(tlm_ingest::XatuDataset::Erc20Transfers),
-        "native_transfers" => Ok(tlm_ingest::XatuDataset::NativeTransfers),
-        unknown => Err(format!("unknown Xatu dataset {unknown}")),
-    }).collect()
+    names
+        .split(',')
+        .map(|name| match name.trim() {
+            "blocks" => Ok(tlm_ingest::XatuDataset::Blocks),
+            "transactions" => Ok(tlm_ingest::XatuDataset::Transactions),
+            "logs" => Ok(tlm_ingest::XatuDataset::Logs),
+            "traces" => Ok(tlm_ingest::XatuDataset::Traces),
+            "erc20_transfers" => Ok(tlm_ingest::XatuDataset::Erc20Transfers),
+            "native_transfers" => Ok(tlm_ingest::XatuDataset::NativeTransfers),
+            unknown => Err(format!("unknown Xatu dataset {unknown}")),
+        })
+        .collect()
 }
 
 fn report(v: Vec<String>) -> ExitCode {
@@ -658,6 +731,9 @@ struct BuilderStats {
     blocks: u64,
     txs: u64,
     zero_tip_txs: u64,
+    zero_tip_top_5: u64,
+    zero_tip_top_10: u64,
+    zero_tip_top_20: u64,
     correlation_sum: f64,
     correlations: u64,
     tip_sum: f64,
@@ -891,6 +967,9 @@ fn activity_tip_xatu_report(plan: &tlm_report::ReportPlan, out: &PathBuf) -> Res
             let mut builder_tip_sum = 0.0;
             let mut builder_position_sum = 0.0;
             let mut builder_zero_tip_txs = 0u64;
+            let mut builder_zero_tip_top_5 = 0u64;
+            let mut builder_zero_tip_top_10 = 0u64;
+            let mut builder_zero_tip_top_20 = 0u64;
             for tx in txs {
                 cumulative = cumulative.saturating_add(tx.gas_used);
                 if tx.tx_type >= 2 {
@@ -920,6 +999,17 @@ fn activity_tip_xatu_report(plan: &tlm_report::ReportPlan, out: &PathBuf) -> Res
                 let g = groups.entry(a.as_str().to_owned()).or_default();
                 g.tips.push(effective_tip as u128);
                 let position = (cumulative as f64 / block.gas_used as f64).min(1.0);
+                if effective_tip == 0 {
+                    if position <= 0.05 {
+                        builder_zero_tip_top_5 += 1;
+                    }
+                    if position <= 0.10 {
+                        builder_zero_tip_top_10 += 1;
+                    }
+                    if position <= 0.20 {
+                        builder_zero_tip_top_20 += 1;
+                    }
+                }
                 g.positions.push(position);
                 g.tip_positions.push((effective_tip as u128, position));
                 for threshold in region_thresholds {
@@ -951,6 +1041,9 @@ fn activity_tip_xatu_report(plan: &tlm_report::ReportPlan, out: &PathBuf) -> Res
             b.blocks += 1;
             b.txs += builder_points.len() as u64;
             b.zero_tip_txs += builder_zero_tip_txs;
+            b.zero_tip_top_5 += builder_zero_tip_top_5;
+            b.zero_tip_top_10 += builder_zero_tip_top_10;
+            b.zero_tip_top_20 += builder_zero_tip_top_20;
             b.tip_sum += builder_tip_sum;
             b.position_sum += builder_position_sum;
             if let Some(correlation) = pearson(&builder_points) {
@@ -992,7 +1085,7 @@ fn activity_tip_xatu_report(plan: &tlm_report::ReportPlan, out: &PathBuf) -> Res
     }
     markdown.push_str(&format!("\nFee method: type-2+ effective tip = min(max priority fee, max fee − base fee); legacy transactions use gas price − base fee. Type-2+ transactions: {}; Xatu gas_price equal to max_fee: {} ({:.2}%).\n",fee_diagnostics.type2_or_newer,fee_diagnostics.gas_price_equals_max_fee,100.0*fee_diagnostics.gas_price_equals_max_fee as f64/fee_diagnostics.type2_or_newer.max(1) as f64));
     markdown.push_str("\nPrivate/public-flow columns require a public-mempool hash join. This Xatu execution-only run has no such join attached, so they are intentionally N/A; tip = 0 is a measured fee bucket, not a private-flow label.\n");
-    markdown.push_str("\n## Builder signal and within-block tip-position correlation\n\nThe builder signal is the block extra-data string, not a relay-verified builder identity. Correlation is the mean per-block Pearson correlation between effective tip (gwei/gas) and cumulative-gas position. Builders are sorted by observed block count.\n\n| Builder signal | Blocks | Block market share | Transactions | Zero-tip txs | Zero-tip share | Mean tip (gwei/gas) | Mean position | Mean correlation |\n| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
+    markdown.push_str("\n## Builder signal and within-block tip-position correlation\n\nThe builder signal is the block extra-data string, not a relay-verified builder identity. Correlation is the mean per-block Pearson correlation between effective tip (gwei/gas) and cumulative-gas position. The early-position columns are cumulative shares of zero-tip transactions in the first 5%, 10%, and 20% of gas used in a builder's blocks. Builders are sorted by observed block count.\n\n| Builder signal | Blocks | Block market share | Transactions | Zero-tip txs | Zero-tip share | Zero-tip share, first 5% | Zero-tip share, first 10% | Zero-tip share, first 20% | Mean tip (gwei/gas) | Mean position | Mean correlation |\n| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
     let mut builder_rows: Vec<_> = builders.into_iter().collect();
     builder_rows.sort_by(|(left_name, left), (right_name, right)| {
         right
@@ -1009,12 +1102,15 @@ fn activity_tip_xatu_report(plan: &tlm_report::ReportPlan, out: &PathBuf) -> Res
             stats.correlation_sum / stats.correlations as f64
         };
         markdown.push_str(&format!(
-            "| {builder} | {} | {:.2}% | {} | {} | {:.2}% | {:.4} | {:.4} | {:.4} |\n",
+            "| {builder} | {} | {:.2}% | {} | {} | {:.2}% | {:.2}% | {:.2}% | {:.2}% | {:.4} | {:.4} | {:.4} |\n",
             stats.blocks,
             100.0 * stats.blocks as f64 / blocks.len().max(1) as f64,
             stats.txs,
             stats.zero_tip_txs,
             100.0 * stats.zero_tip_txs as f64 / stats.txs.max(1) as f64,
+            100.0 * stats.zero_tip_top_5 as f64 / stats.zero_tip_txs.max(1) as f64,
+            100.0 * stats.zero_tip_top_10 as f64 / stats.zero_tip_txs.max(1) as f64,
+            100.0 * stats.zero_tip_top_20 as f64 / stats.zero_tip_txs.max(1) as f64,
             mean_tip,
             mean_position,
             correlation
