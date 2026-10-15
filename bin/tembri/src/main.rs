@@ -900,6 +900,11 @@ fn parquet_u64(row: &parquet::record::Row, col: usize) -> Result<u64, String> {
     row.get_ulong(col)
         .or_else(|_| row.get_uint(col).map(u64::from))
         .or_else(|_| row.get_ubyte(col).map(u64::from))
+        .or_else(|_| {
+            row.get_int(col)
+                .map_err(|e| e.to_string())
+                .and_then(|value| u64::try_from(value).map_err(|_| "negative value where an unsigned value was expected".into()))
+        })
         .map_err(|e| e.to_string())
 }
 fn parquet_fee_u64(row: &parquet::record::Row, col: usize) -> Result<u64, String> {
