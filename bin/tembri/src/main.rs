@@ -773,6 +773,89 @@ struct FeeDiagnostics {
     type2_or_newer: u64,
     gas_price_equals_max_fee: u64,
 }
+
+#[derive(Clone)]
+struct FingerprintRow {
+    activity: String,
+    builder: String,
+    priority_fee: u64,
+    effective_tip: u64,
+    position: f64,
+    fingerprint: tlm_classify::FeeFingerprint,
+}
+
+fn append_fee_fingerprint_report(markdown: &mut String, rows: &[FingerprintRow]) -> Result<(), String> {
+    if rows.is_empty() {
+        markdown.push_str("\n## Fee-field fingerprints (v4)\n\nNo type-2-or-later transactions were available.\n");
+        return Ok(());
+    }
+    let nonzero_priority = rows.iter().filter(|row| row.priority_fee > 0).count();
+    if nonzero_priority == 0 {
+        return Err("validation stop: no type-2 transaction has a nonzero max_priority_fee".into());
+    }
+    let base_fee_matches = rows.iter().filter(|row| row.fingerprint.tip_at_base_fee_lag.is_some()).count();
+    if base_fee_matches * 100 > rows.len() * 90 {
+        return Err("validation stop: tip_at_base_fee exceeds 90% of type-2 transactions".into());
+    }
+    let missing_lag = rows.iter().filter(|row| row.fingerprint.missing_prior_lag).count();
+    if missing_lag * 100 > rows.len() {
+        return Err("validation stop: missing prior-base-fee lags exceed 1% of type-2 transactions".into());
+    }
+    markdown.push_str("\n## Fee-field fingerprints (v4)\n\nFingerprints describe signed-fee patterns, not wallet identity. They use `max_priority_fee_per_gas` and `max_fee_per_gas` on type-2+ transactions. Base-fee comparisons examine the including block and up to three preceding blocks. A base-fee-like match has 5% tolerance; the max-fee formula has 1% tolerance.\n");
+    markdown.push_str(&format!("\nType-2+ transactions: {}. Missing one or more parent-base-fee lags: {} ({:.3}%).\n", rows.len(), missing_lag, 100.0 * missing_lag as f64 / rows.len() as f64));
+
+    let mut histogram: std::collections::BTreeMap<u64, u64> = std::collections::BTreeMap::new();
+    for row in rows { *histogram.entry(row.priority_fee).or_default() += 1; }
+    let mut histogram: Vec<_> = histogram.into_iter().collect();
+    histogram.sort_by(|(left_fee, left_count), (right_fee, right_count)| right_count.cmp(left_count).then_with(|| left_fee.cmp(right_fee)));
+    markdown.push_str("\n### Signed priority-fee histogram\n\n| max priority fee (gwei/gas) | Transactions | Share of type-2+ |\n| ---: | ---: | ---: |\n");
+    for (fee, count) in histogram.into_iter().take(20) {
+        markdown.push_str(&format!("| {:.6} | {count} | {:.2}% |\n", fee as f64 / 1_000_000_000.0, 100.0 * count as f64 / rows.len() as f64));
+    }
+
+    let mut activities: std::collections::BTreeMap<&str, Vec<&FingerprintRow>> = std::collections::BTreeMap::new();
+    for row in rows { activities.entry(&row.activity).or_default().push(row); }
+    markdown.push_str("\n### Fingerprint shares by activity type\n\n`any default` is the union of base-fee-like priority fee, max-fee formula, and exact round-tip fingerprints. Early-position shares are calculated separately for tagged and untagged rows.\n\n| Activity type | Type-2+ tx | At base fee | At twice base fee (control) | Max-fee formula | Round tip | Any default | Tagged avg. position | Untagged avg. position | Tagged first 5% | Untagged first 5% | Tagged first 10% | Untagged first 10% |\n| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
+    for (activity, values) in &activities {
+        let n = values.len().max(1) as f64;
+        let tagged: Vec<_> = values.iter().copied().filter(|row| row.fingerprint.any_default()).collect();
+        let untagged: Vec<_> = values.iter().copied().filter(|row| !row.fingerprint.any_default()).collect();
+        let share = |items: &[&FingerprintRow], test: fn(&FingerprintRow) -> bool| 100.0 * items.iter().filter(|row| test(row)).count() as f64 / n;
+        let avg_position = |items: &[&FingerprintRow]| if items.is_empty() { f64::NAN } else { items.iter().map(|row| row.position).sum::<f64>() / items.len() as f64 };
+        let early = |items: &[&FingerprintRow], ceiling: f64| if items.is_empty() { f64::NAN } else { 100.0 * items.iter().filter(|row| row.position <= ceiling).count() as f64 / items.len() as f64 };
+        markdown.push_str(&format!("| {activity} | {} | {:.2}% | {:.2}% | {:.2}% | {:.2}% | {:.2}% | {:.4} | {:.4} | {:.2}% | {:.2}% | {:.2}% | {:.2}% |\n", values.len(), share(values, |row| row.fingerprint.tip_at_base_fee_lag.is_some()), share(values, |row| row.fingerprint.tip_at_twice_base_fee_lag.is_some()), share(values, |row| row.fingerprint.default_max_fee_formula_lag.is_some()), share(values, |row| row.fingerprint.round_tip), 100.0 * tagged.len() as f64 / n, avg_position(&tagged), avg_position(&untagged), early(&tagged, 0.05), early(&untagged, 0.05), early(&tagged, 0.10), early(&untagged, 0.10)));
+    }
+
+    let mut builders: std::collections::BTreeMap<&str, Vec<&FingerprintRow>> = std::collections::BTreeMap::new();
+    for row in rows { builders.entry(&row.builder).or_default().push(row); }
+    let mut builders: Vec<_> = builders.into_iter().collect();
+    builders.sort_by(|(left_name, left), (right_name, right)| right.len().cmp(&left.len()).then_with(|| left_name.cmp(right_name)));
+    markdown.push_str("\n### Fingerprint shares by builder signal\n\n| Builder signal | Type-2+ tx | Any default | Tip at base fee |\n| --- | ---: | ---: | ---: |\n");
+    for (builder, values) in builders {
+        let n = values.len().max(1) as f64;
+        markdown.push_str(&format!("| {builder} | {} | {:.2}% | {:.2}% |\n", values.len(), 100.0 * values.iter().filter(|row| row.fingerprint.any_default()).count() as f64 / n, 100.0 * values.iter().filter(|row| row.fingerprint.tip_at_base_fee_lag.is_some()).count() as f64 / n));
+    }
+
+    markdown.push_str("\n### Position-gradient robustness by individual fingerprint\n\nThe first band is 0–10% of cumulative block gas; the late band is 30–60%. Each fingerprint column is evaluated on that tag's rows, so columns can overlap. `Untagged` has none of the three default fingerprints. Ratio is early-band mean effective tip divided by late-band mean effective tip.\n\n| Activity type | All | Round tip | Max-fee formula | Tip at base fee | Untagged |\n| --- | ---: | ---: | ---: | ---: | ---: |\n");
+    for (activity, values) in activities {
+        let ratio = |subset: Vec<&&FingerprintRow>| {
+            let early: Vec<_> = subset.iter().filter(|row| row.position <= 0.10).collect();
+            let late: Vec<_> = subset.iter().filter(|row| row.position > 0.30 && row.position <= 0.60).collect();
+            if early.is_empty() || late.is_empty() { f64::NAN } else {
+                let e = early.iter().map(|row| row.effective_tip as f64).sum::<f64>() / early.len() as f64;
+                let l = late.iter().map(|row| row.effective_tip as f64).sum::<f64>() / late.len() as f64;
+                if l == 0.0 { f64::NAN } else { e / l }
+            }
+        };
+        let all: Vec<_> = values.iter().collect();
+        let round: Vec<_> = values.iter().filter(|row| row.fingerprint.round_tip).collect();
+        let formula: Vec<_> = values.iter().filter(|row| row.fingerprint.default_max_fee_formula_lag.is_some()).collect();
+        let base_fee: Vec<_> = values.iter().filter(|row| row.fingerprint.tip_at_base_fee_lag.is_some()).collect();
+        let untagged: Vec<_> = values.iter().filter(|row| !row.fingerprint.any_default()).collect();
+        markdown.push_str(&format!("| {activity} | {:.2} | {:.2} | {:.2} | {:.2} | {:.2} |\n", ratio(all), ratio(round), ratio(formula), ratio(base_fee), ratio(untagged)));
+    }
+    Ok(())
+}
 fn effective_tip(tx: &XatuTx, base_fee: u64) -> u64 {
     if tx.tx_type >= 2 && tx.max_fee > 0 {
         tx.max_priority_fee.min(tx.max_fee.saturating_sub(base_fee))
@@ -802,7 +885,7 @@ fn parquet_text(row: &parquet::record::Row, col: usize) -> Option<String> {
 fn builder_name(raw: String) -> String {
     let hex = raw.strip_prefix("0x").filter(|value| value.len() % 2 == 0);
     let decoded = hex.and_then(|value| {
-        let bytes: (Option<Vec<u8>>) = (0..value.len())
+        let bytes: Option<Vec<u8>> = (0..value.len())
             .step_by(2)
             .map(|i| u8::from_str_radix(&value[i..i + 2], 16).ok())
             .collect();
@@ -896,7 +979,9 @@ fn activity_tip_xatu_report(plan: &tlm_report::ReportPlan, out: &PathBuf) -> Res
                 number,
                 XatuBlock {
                     gas_used: parquet_u64(&row, 5).unwrap_or(0),
-                    base_fee: parquet_u64(&row, 8).unwrap_or(0),
+                    // Xatu blocks schema: column 9 is base_fee_per_gas; column 8 is extra_data_string.
+                    // Do not default this field: a zero base fee invalidates effective-tip measurement.
+                    base_fee: parquet_u64(&row, 9)?,
                     builder_signal: parquet_text(&row, 7)
                         .map(builder_name)
                         .filter(|s| !s.is_empty())
@@ -919,6 +1004,8 @@ fn activity_tip_xatu_report(plan: &tlm_report::ReportPlan, out: &PathBuf) -> Res
         std::collections::BTreeMap::new();
     let mut tx_count = 0u64;
     let mut fee_diagnostics = FeeDiagnostics::default();
+    let mut fingerprint_rows: Vec<FingerprintRow> = Vec::new();
+    let fingerprint_config = tlm_classify::FeeFingerprintConfig::default();
     for path in xatu_plan_files(plan, "transactions")? {
         let log_path = path
             .parent()
@@ -999,6 +1086,17 @@ fn activity_tip_xatu_report(plan: &tlm_report::ReportPlan, out: &PathBuf) -> Res
                 let g = groups.entry(a.as_str().to_owned()).or_default();
                 g.tips.push(effective_tip as u128);
                 let position = (cumulative as f64 / block.gas_used as f64).min(1.0);
+                if tx.tx_type >= 2 {
+                    let base_fees = [0u64, 1, 2, 3].map(|lag| blocks.get(&number.saturating_sub(lag)).map(|candidate| candidate.base_fee));
+                    fingerprint_rows.push(FingerprintRow {
+                        activity: a.as_str().to_owned(),
+                        builder: block.builder_signal.clone(),
+                        priority_fee: tx.max_priority_fee,
+                        effective_tip,
+                        position,
+                        fingerprint: tlm_classify::fingerprint_fee_fields(tx.tx_type, tx.max_priority_fee, tx.max_fee, base_fees, &fingerprint_config),
+                    });
+                }
                 if effective_tip == 0 {
                     if position <= 0.05 {
                         builder_zero_tip_top_5 += 1;
@@ -1085,6 +1183,7 @@ fn activity_tip_xatu_report(plan: &tlm_report::ReportPlan, out: &PathBuf) -> Res
     }
     markdown.push_str(&format!("\nFee method: type-2+ effective tip = min(max priority fee, max fee − base fee); legacy transactions use gas price − base fee. Type-2+ transactions: {}; Xatu gas_price equal to max_fee: {} ({:.2}%).\n",fee_diagnostics.type2_or_newer,fee_diagnostics.gas_price_equals_max_fee,100.0*fee_diagnostics.gas_price_equals_max_fee as f64/fee_diagnostics.type2_or_newer.max(1) as f64));
     markdown.push_str("\nPrivate/public-flow columns require a public-mempool hash join. This Xatu execution-only run has no such join attached, so they are intentionally N/A; tip = 0 is a measured fee bucket, not a private-flow label.\n");
+    append_fee_fingerprint_report(&mut markdown, &fingerprint_rows)?;
     markdown.push_str("\n## Builder signal and within-block tip-position correlation\n\nThe builder signal is the block extra-data string, not a relay-verified builder identity. Correlation is the mean per-block Pearson correlation between effective tip (gwei/gas) and cumulative-gas position. The early-position columns are cumulative shares of zero-tip transactions in the first 5%, 10%, and 20% of gas used in a builder's blocks. Builders are sorted by observed block count.\n\n| Builder signal | Blocks | Block market share | Transactions | Zero-tip txs | Zero-tip share | Zero-tip share, first 5% | Zero-tip share, first 10% | Zero-tip share, first 20% | Mean tip (gwei/gas) | Mean position | Mean correlation |\n| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
     let mut builder_rows: Vec<_> = builders.into_iter().collect();
     builder_rows.sort_by(|(left_name, left), (right_name, right)| {

@@ -2,11 +2,13 @@
 
 pub mod activity;
 pub mod lifecycle;
+pub mod fee_fingerprint;
 pub use activity::{
     ActivityFilter, ClassifiedActivity, CompositionCounts, MempoolVisibility, PublicMempoolIndex,
     TipBucket,
 };
 pub use lifecycle::measure_mempool_lifecycle;
+pub use fee_fingerprint::{fingerprint_fee_fields, FeeFingerprint, FeeFingerprintConfig};
 
 use tlm_model::{Block, LabelConfig, MempoolSeen, Transaction, TxLabels};
 
