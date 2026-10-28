@@ -6,9 +6,178 @@
 
 use std::collections::BTreeMap;
 use tlm_model::{
-    PropammBlockSummary, PropammBuilderSummary, PropammEvent, PropammEventKind, PropammFillPair,
-    PropammPairingResult,
+    PropammBlockSummary, PropammBuilderSummary, PropammEvent, PropammEventKind, PropammEventRule,
+    PropammFillPair, PropammLog, PropammPairingResult, PropammCall, PropammRegistryTarget,
 };
+
+/// Selector for `batchUpdateStateWithSignature((address,address,uint256,uint32,uint256[],bytes)[])`.
+pub const REGISTRY_BATCH_UPDATE_SELECTOR: &str = "0xe50de8ea";
+
+/// Decode reviewed targets from the registry's signed-update batch calldata.
+///
+/// The registry does not emit a state-update event. This parser reads only the
+/// ABI fields needed for P0 (`target` and `updateTimestamp`), requires the
+/// exact registry address and selector, and discards unreviewed targets.
+pub fn decode_registry_batch_updates(
+    call: &PropammCall,
+    registry: &str,
+    targets: &[PropammRegistryTarget],
+) -> Result<Vec<PropammEvent>, String> {
+    if !call.to.eq_ignore_ascii_case(registry)
+        || !call.input.get(..10).is_some_and(|selector| selector.eq_ignore_ascii_case(REGISTRY_BATCH_UPDATE_SELECTOR))
+    {
+        return Ok(Vec::new());
+    }
+    let bytes = hex_bytes(&call.input[10..])?;
+    let array_offset = abi_usize(&bytes, 0)?;
+    let length = abi_usize(&bytes, array_offset)?;
+    let offsets_base = array_offset
+        .checked_add(32)
+        .ok_or("registry update array offset overflow")?;
+    let mut events = Vec::new();
+    for index in 0..length {
+        let offset_word = offsets_base
+            .checked_add(index.checked_mul(32).ok_or("registry update index overflow")?)
+            .ok_or("registry update offset overflow")?;
+        let element_offset = abi_usize(&bytes, offset_word)?;
+        let element = offsets_base
+            .checked_add(element_offset)
+            .ok_or("registry update element offset overflow")?;
+        let target = abi_address(&bytes, element)?;
+        let timestamp = abi_u32(&bytes, element.checked_add(96).ok_or("registry update timestamp offset overflow")?)?;
+        let Some(label) = targets
+            .iter()
+            .find(|label| label.target.eq_ignore_ascii_case(&target))
+        else {
+            continue;
+        };
+        events.push(PropammEvent {
+            block_number: call.block_number,
+            pool: label.pool.clone(),
+            venue: label.venue.clone(),
+            builder: call.builder.clone(),
+            tx_hash: call.tx_hash.clone(),
+            tx_position: call.tx_position,
+            cumulative_gas_before: call.cumulative_gas_before,
+            update_timestamp: Some(timestamp.into()),
+            kind: PropammEventKind::Update,
+        });
+    }
+    Ok(events)
+}
+
+/// Decode all reviewed PropAMM evidence from one execution-data slice.
+///
+/// A log must match exactly one fill rule. Rejecting overlapping rules avoids
+/// silently double-counting a fill when the registry evolves.
+pub fn decode_propamm_activity(
+    logs: &[PropammLog],
+    calls: &[PropammCall],
+    fill_rules: &[PropammEventRule],
+    registry: &str,
+    registry_targets: &[PropammRegistryTarget],
+) -> Result<Vec<PropammEvent>, String> {
+    let mut events = Vec::new();
+    for log in logs {
+        let matches: Vec<_> = fill_rules
+            .iter()
+            .filter_map(|rule| decode_propamm_log(log, rule))
+            .collect();
+        match matches.len() {
+            0 => {}
+            1 => events.push(matches.into_iter().next().expect("one match")),
+            _ => {
+                return Err(format!(
+                    "overlapping PropAMM fill rules for {} log {}",
+                    log.tx_hash, log.log_index
+                ))
+            }
+        }
+    }
+    for call in calls {
+        events.extend(decode_registry_batch_updates(
+            call,
+            registry,
+            registry_targets,
+        )?);
+    }
+    events.sort_by(|left, right| {
+        left
+            .block_number
+            .cmp(&right.block_number)
+            .then_with(|| left.tx_position.cmp(&right.tx_position))
+            .then_with(|| left.tx_hash.cmp(&right.tx_hash))
+            .then_with(|| match (&left.kind, &right.kind) {
+                (PropammEventKind::Update, PropammEventKind::Fill) => std::cmp::Ordering::Less,
+                (PropammEventKind::Fill, PropammEventKind::Update) => std::cmp::Ordering::Greater,
+                _ => std::cmp::Ordering::Equal,
+            })
+    });
+    Ok(events)
+}
+
+fn hex_bytes(value: &str) -> Result<Vec<u8>, String> {
+    if !value.len().is_multiple_of(2) {
+        return Err("registry calldata has an odd hex length".into());
+    }
+    (0..value.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(&value[index..index + 2], 16).map_err(|_| "registry calldata is not hexadecimal".into()))
+        .collect()
+}
+
+fn abi_word(bytes: &[u8], offset: usize) -> Result<&[u8], String> {
+    bytes
+        .get(offset..offset.checked_add(32).ok_or("ABI word offset overflow")?)
+        .ok_or_else(|| "registry calldata ends before an ABI word".into())
+}
+
+fn abi_usize(bytes: &[u8], offset: usize) -> Result<usize, String> {
+    let word = abi_word(bytes, offset)?;
+    if word[..24].iter().any(|byte| *byte != 0) {
+        return Err("registry ABI offset exceeds u64".into());
+    }
+    let value = word[24..]
+        .iter()
+        .fold(0u64, |value, byte| (value << 8) | u64::from(*byte));
+    usize::try_from(value).map_err(|_| "registry ABI offset exceeds platform size".into())
+}
+
+fn abi_address(bytes: &[u8], offset: usize) -> Result<String, String> {
+    let word = abi_word(bytes, offset)?;
+    Ok(format!(
+        "0x{}",
+        word[12..]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    ))
+}
+
+fn abi_u32(bytes: &[u8], offset: usize) -> Result<u32, String> {
+    let word = abi_word(bytes, offset)?;
+    if word[..28].iter().any(|byte| *byte != 0) {
+        return Err("registry update timestamp exceeds uint32".into());
+    }
+    Ok(u32::from_be_bytes(word[28..].try_into().expect("four bytes")))
+}
+
+/// Decode a log only when it exactly matches a reviewed address-and-topic rule.
+/// No selector, transfer pattern, or proximity heuristic is used as evidence.
+pub fn decode_propamm_log(log: &PropammLog, rule: &PropammEventRule) -> Option<PropammEvent> {
+    (log.emitter.eq_ignore_ascii_case(&rule.emitter) && log.topic0.eq_ignore_ascii_case(&rule.topic0))
+        .then(|| PropammEvent {
+            block_number: log.block_number,
+            pool: rule.pool.clone(),
+            venue: rule.venue.clone(),
+            builder: log.builder.clone(),
+            tx_hash: log.tx_hash.clone(),
+            tx_position: log.tx_position,
+            cumulative_gas_before: log.cumulative_gas_before,
+            update_timestamp: None,
+            kind: rule.kind.clone(),
+        })
+}
 
 /// Pair decoded events by `(block_number, pool)` in EVM transaction order.
 ///
@@ -175,8 +344,170 @@ mod tests {
             tx_hash: format!("0x{position}"),
             tx_position: position,
             cumulative_gas_before: gas,
+            update_timestamp: None,
             kind,
         }
+    }
+
+    #[test]
+    fn decodes_only_an_exact_reviewed_address_and_topic() {
+        let log = PropammLog {
+            block_number: 10,
+            emitter: "0xFermi".into(),
+            tx_hash: "0xfill".into(),
+            tx_position: 2,
+            cumulative_gas_before: 100,
+            log_index: 4,
+            topic0: "0xTopic".into(),
+            builder: Some("titan".into()),
+        };
+        let rule = PropammEventRule {
+            emitter: "0xfermi".into(),
+            topic0: "0xtopic".into(),
+            venue: "fermiswap".into(),
+            pool: "0xfermi".into(),
+            kind: PropammEventKind::Fill,
+        };
+        let decoded = decode_propamm_log(&log, &rule).expect("reviewed rule should match");
+        assert_eq!(decoded.kind, PropammEventKind::Fill);
+        assert_eq!(decoded.pool, "0xfermi");
+
+        let mut different_topic = log;
+        different_topic.topic0 = "0xother".into();
+        assert_eq!(decode_propamm_log(&different_topic, &rule), None);
+    }
+
+    #[test]
+    fn decodes_reviewed_registry_targets_and_timestamp_from_a_signed_batch() {
+        let address_word = |address: &str| format!("{:0>64}", address.trim_start_matches("0x"));
+        let number_word = |number: u64| format!("{number:064x}");
+        // ABI payload: offset to array, one dynamic tuple offset, then tuple's
+        // target/signer/lane/updateTimestamp header. The trailing dynamic fields
+        // are not read by the P0 decoder.
+        let input = format!(
+            "{REGISTRY_BATCH_UPDATE_SELECTOR}{}{}{}{}{}{}{}",
+            number_word(32),
+            number_word(1),
+            number_word(32),
+            address_word("0x00000000000000000000000000000000000000aa"),
+            address_word("0x00000000000000000000000000000000000000bb"),
+            number_word(0),
+            number_word(1_700_000_000),
+        );
+        let call = PropammCall {
+            block_number: 10,
+            to: "0xregistry".into(),
+            tx_hash: "0xupdate".into(),
+            tx_position: 1,
+            cumulative_gas_before: 10,
+            input,
+            builder: Some("titan".into()),
+        };
+        let targets = [PropammRegistryTarget {
+            target: "0x00000000000000000000000000000000000000aa".into(),
+            venue: "fermiswap".into(),
+            pool: "0xpool".into(),
+        }];
+        let updates = decode_registry_batch_updates(&call, "0xREGISTRY", &targets).unwrap();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].kind, PropammEventKind::Update);
+        assert_eq!(updates[0].update_timestamp, Some(1_700_000_000));
+    }
+
+    #[test]
+    fn registry_decoder_rejects_wrong_selector_and_unreviewed_target() {
+        let call = PropammCall {
+            block_number: 10,
+            to: "0xregistry".into(),
+            tx_hash: "0xother".into(),
+            tx_position: 1,
+            cumulative_gas_before: 0,
+            input: "0x12345678".into(),
+            builder: None,
+        };
+        assert!(decode_registry_batch_updates(&call, "0xregistry", &[])
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn combines_reviewed_update_and_fill_evidence_for_pairing() {
+        let address_word = |address: &str| format!("{:0>64}", address.trim_start_matches("0x"));
+        let number_word = |number: u64| format!("{number:064x}");
+        let update_call = PropammCall {
+            block_number: 10,
+            to: "0xregistry".into(),
+            tx_hash: "0xupdate".into(),
+            tx_position: 1,
+            cumulative_gas_before: 10,
+            input: format!(
+                "{REGISTRY_BATCH_UPDATE_SELECTOR}{}{}{}{}{}{}{}",
+                number_word(32),
+                number_word(1),
+                number_word(32),
+                address_word("0x00000000000000000000000000000000000000aa"),
+                address_word("0x00000000000000000000000000000000000000bb"),
+                number_word(0),
+                number_word(1_700_000_000),
+            ),
+            builder: Some("titan".into()),
+        };
+        let fill_log = PropammLog {
+            block_number: 10,
+            emitter: "0xpool".into(),
+            tx_hash: "0xfill".into(),
+            tx_position: 3,
+            cumulative_gas_before: 30,
+            log_index: 0,
+            topic0: "0xfilltopic".into(),
+            builder: Some("titan".into()),
+        };
+        let events = decode_propamm_activity(
+            &[fill_log],
+            &[update_call],
+            &[PropammEventRule {
+                emitter: "0xpool".into(),
+                topic0: "0xfilltopic".into(),
+                venue: "venue".into(),
+                pool: "0xpool".into(),
+                kind: PropammEventKind::Fill,
+            }],
+            "0xregistry",
+            &[PropammRegistryTarget {
+                target: "0x00000000000000000000000000000000000000aa".into(),
+                venue: "venue".into(),
+                pool: "0xpool".into(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(events.len(), 2);
+        let pairs = pair_propamm_events(&events);
+        assert_eq!(pairs[0].result, PropammPairingResult::PropammFill);
+        assert_eq!(pairs[0].transaction_gap, Some(2));
+    }
+
+    #[test]
+    fn rejects_overlapping_fill_rules() {
+        let log = PropammLog {
+            block_number: 10,
+            emitter: "0xpool".into(),
+            tx_hash: "0xfill".into(),
+            tx_position: 1,
+            cumulative_gas_before: 0,
+            log_index: 0,
+            topic0: "0xtopic".into(),
+            builder: None,
+        };
+        let rule = PropammEventRule {
+            emitter: "0xpool".into(),
+            topic0: "0xtopic".into(),
+            venue: "venue".into(),
+            pool: "0xpool".into(),
+            kind: PropammEventKind::Fill,
+        };
+        assert!(decode_propamm_activity(&[log], &[], &[rule.clone(), rule], "0xregistry", &[])
+            .unwrap_err()
+            .contains("overlapping"));
     }
 
     #[test]

@@ -6,6 +6,11 @@ erc20_transfer = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523
 erc20_approval = "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925"
 uniswap_v2_swap = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822"
 uniswap_v3_swap = "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67"
+# FermiSwap's verified fill ABI is
+# Swapped(address,address,address,uint256,uint256,address), with the first
+# three addresses indexed. Reviewed against its deployed event logs and the
+# verified ABI view on Etherscan on 2026-10-28.
+propamm_fermiswap_fill = "0x1eeaa4acf3c225a4033105c2647625dbb298dec93b14e16253c4231e26c02b1d"
 
 # Add only selectors verified against the named protocol's deployed mainnet ABI.
 [liquidations]
@@ -24,3 +29,45 @@ contracts = []
 pubkeys = []
 fee_recipients = []
 affiliates = []
+
+# PropAMM layer-0 address labels. Sources reviewed 2026-10-28:
+# - BuilderNet API Reference, "propAMM stream addresses" (registry and Metric
+#   oracle contracts): https://buildernet.org/docs/api
+# - Lambda Class PropAMMRouter deployed-contract table (venue entrypoints and
+#   reference router): https://github.com/lambdaclass/propamm-router-contracts
+# All addresses below returned non-empty bytecode through eth_getCode on
+# Ethereum mainnet at block 26,293,715. They are entrypoint/oracle labels, not
+# a claim that each address is a distinct liquidity pool.
+#
+# Event topics are intentionally absent. A topic is enabled only after its
+# deployed contract ABI and decoded sample receipts are reviewed.
+[propamm]
+chain_id = 1
+validated_block = 26293715
+datafeed_registry = "0xda7afeed021eafc1c1af9c362de477dad0396b81"
+reference_router = "0x4ddf368080cd7946db5b459ad591c350158175e1"
+fermiswap_entrypoint = "0x5979458912f80b96d30d4220af8e2e4925a33320"
+kipseli_entrypoint = "0x71e790dd841c8a9061487cb3e78c288e75ce0b3d"
+tempest_entrypoint = "0x00000003f1ec2379e79f58e12ec6c4f51ee92149"
+bopamm_entrypoint = "0xb09aaa5614916d7aeb59c295c52c92ca82addd76"
+metric_entrypoint = "0xe715dc29d2c273d0fc5a03e5cca9ccb0abb1dcdb"
+metric_compressed_oracle = "0xe844701934d9c6085b292e428f41b911cc0b3872"
+metric_pyth_oracle = "0x30a88bf894d1b806125a23ebf23d715496fd7102"
+
+# Registry targets are separate from fill entrypoints. `pool` is the
+# same-pool join key used by the pairing layer, and must be the corresponding
+# venue entrypoint until a finer pool inventory is ABI-confirmed.
+[[propamm.registry_targets]]
+target = "0x00000003f1ec2379e79f58e12ec6c4f51ee92149"
+pool = "0x00000003f1ec2379e79f58e12ec6c4f51ee92149"
+venue = "tempest"
+
+[[propamm.registry_targets]]
+target = "0xc9a956b5196dfe110debe8781857bc8b97d32091"
+pool = "0x71e790dd841c8a9061487cb3e78c288e75ce0b3d"
+venue = "kipseli"
+
+[[propamm.registry_targets]]
+target = "0xb09999a44e3240193193be9dd99cc73c8cc945a6"
+pool = "0xb09aaa5614916d7aeb59c295c52c92ca82addd76"
+venue = "bopamm"

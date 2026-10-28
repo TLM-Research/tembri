@@ -51,3 +51,29 @@ in its denominator.
   freshness protection, public/private routing, markouts, or verified builder
   identity. Those remain downstream P0/P1 work after ABI and address evidence
   is reviewed.
+
+## Layer-0 address evidence
+
+`config/labels.toml` records the reviewed mainnet entrypoints for the shared
+Priority Update Registry, reference router, five requested venues, and Metric's
+two documented oracle contracts. The source tables are BuilderNet's PropAMM API
+reference and Lambda Class's deployed-contract table. Every address returned
+non-empty code through `eth_getCode` at Ethereum mainnet block 26,293,715 on
+28 October 2026. The labels deliberately call venue addresses `entrypoint`s:
+this validation alone does not establish pool topology or a fill ABI.
+
+The first enabled event rule is FermiSwap's `Swapped` fill topic,
+`0x1eeaa4acf3c225a4033105c2647625dbb298dec93b14e16253c4231e26c02b1d`.
+It was checked against deployed Fermi logs and the verified ABI view for
+`Swapped(address,address,address,uint256,uint256,address)`. Tembri matches it
+only by exact emitter address and topic; all other venue fills and registry
+updates remain unconfigured pending equivalent evidence.
+
+The registry has no state-update event. Its reviewed `batchUpdateStateWithSignature`
+selector is `0xe50de8ea`; the batch calldata carries each target and its
+`uint32 updateTimestamp`. The decoder accepts a batch only at the reviewed
+registry address and emits updates only for explicit `registry_targets` in
+`labels.toml`. Tempest, Kipseli, and bopAMM targets were documented by
+BuilderNet and returned non-empty bytecode at the same validation block. Their
+pool join keys are the documented venue entrypoints, pending ABI-confirmed
+finer pool topology.

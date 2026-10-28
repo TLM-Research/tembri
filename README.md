@@ -43,7 +43,7 @@ cargo run -p tembri -- --help
 The CLI currently exposes:
 
 ```text
-tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|propamm-pair|mempool-lifecycle|run-period|report>
+tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|propamm-decode|propamm-pair|mempool-lifecycle|run-period|report>
 ```
 
 ## Run an execution report
@@ -79,6 +79,22 @@ cargo run -p tembri -- propamm-pair \
   --pairs-out data/propamm/pairs.ndjson \
   --blocks-out data/propamm/blocks.ndjson \
   --builders-out data/propamm/builders.ndjson
+```
+
+## Decode reviewed PropAMM evidence
+
+Project execution data into `PropammLog` and `PropammCall` NDJSON, then supply
+only reviewed exact-match fill rules and registry targets. This command emits
+the event input consumed by `propamm-pair`; it rejects ambiguous fill rules.
+
+```bash
+cargo run -p tembri -- propamm-decode \
+  --logs data/propamm/logs.ndjson \
+  --calls data/propamm/calls.ndjson \
+  --fill-rules data/propamm/fill_rules.ndjson \
+  --registry 0xda7afeed021eafc1c1af9c362de477dad0396b81 \
+  --registry-targets data/propamm/registry_targets.ndjson \
+  --out data/propamm/events.ndjson
 ```
 
 ## Run a lifecycle report

@@ -205,7 +205,55 @@ pub struct PropammEvent {
     pub tx_hash: String,
     pub tx_position: u32,
     pub cumulative_gas_before: Gas,
+    /// Maker-selected timestamp from a decoded registry update, if present.
+    #[serde(default)]
+    pub update_timestamp: Option<u64>,
     pub kind: PropammEventKind,
+}
+
+/// A log projected from execution data before venue-specific decoding.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropammLog {
+    pub block_number: BlockNumber,
+    pub emitter: String,
+    pub tx_hash: String,
+    pub tx_position: u32,
+    pub cumulative_gas_before: Gas,
+    pub log_index: u32,
+    pub topic0: String,
+    pub builder: Option<String>,
+}
+
+/// A transaction projected from execution data for calldata-level decoding.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropammCall {
+    pub block_number: BlockNumber,
+    pub to: String,
+    pub tx_hash: String,
+    pub tx_position: u32,
+    pub cumulative_gas_before: Gas,
+    pub input: String,
+    pub builder: Option<String>,
+}
+
+/// A reviewed event rule. `pool` is explicit so a registry update may later be
+/// decoded to its target pool rather than incorrectly using the registry.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropammEventRule {
+    pub emitter: String,
+    pub topic0: String,
+    pub venue: String,
+    pub pool: String,
+    pub kind: PropammEventKind,
+}
+
+/// An explicitly reviewed registry target. A registry call is not considered
+/// PropAMM activity unless its decoded target matches one of these rows.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropammRegistryTarget {
+    pub target: String,
+    pub venue: String,
+    pub pool: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

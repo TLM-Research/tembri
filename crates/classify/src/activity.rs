@@ -55,6 +55,9 @@ impl PublicMempoolIndex {
     pub fn len(&self) -> usize {
         self.hashes.len()
     }
+    pub fn is_empty(&self) -> bool {
+        self.hashes.is_empty()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

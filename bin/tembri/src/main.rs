@@ -20,12 +20,13 @@ fn main() -> ExitCode {
         Some("fetch-xatu") => fetch_xatu(a.collect()),
         Some("classify") => classify(a.collect()),
         Some("metrics") => metrics(a.collect()),
+        Some("propamm-decode") => propamm_decode(a.collect()),
         Some("propamm-pair") => propamm_pair(a.collect()),
         Some("mempool-lifecycle") => mempool_lifecycle(a.collect()),
         Some("run-period") => run_period(a.collect()),
         Some("report") => report(a.collect()),
         _ => {
-            println!("Usage: tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|propamm-pair|mempool-lifecycle|run-period|report> ...");
+            println!("Usage: tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|propamm-decode|propamm-pair|mempool-lifecycle|run-period|report> ...");
             ExitCode::from(2)
         }
     }
@@ -358,6 +359,71 @@ fn metrics(v: Vec<String>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn propamm_decode(v: Vec<String>) -> ExitCode {
+    let (Some(logs_path), Some(calls_path), Some(fill_rules_path), Some(registry), Some(targets_path), Some(out)) = (
+        arg(&v, "--logs"),
+        arg(&v, "--calls"),
+        arg(&v, "--fill-rules"),
+        v.windows(2)
+            .find(|window| window[0] == "--registry")
+            .map(|window| window[1].clone()),
+        arg(&v, "--registry-targets"),
+        arg(&v, "--out"),
+    ) else {
+        eprintln!(
+            "Usage: tembri propamm-decode --logs LOGS.ndjson --calls CALLS.ndjson --fill-rules RULES.ndjson --registry ADDRESS --registry-targets TARGETS.ndjson --out EVENTS.ndjson"
+        );
+        return ExitCode::from(2);
+    };
+    let logs = match read_ndjson::<tlm_model::PropammLog>(&logs_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid PropAMM log input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let calls = match read_ndjson::<tlm_model::PropammCall>(&calls_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid PropAMM call input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let rules = match read_ndjson::<tlm_model::PropammEventRule>(&fill_rules_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid PropAMM fill-rule input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let targets = match read_ndjson::<tlm_model::PropammRegistryTarget>(&targets_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid PropAMM registry-target input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let events = match tlm_classify::decode_propamm_activity(
+        &logs, &calls, &rules, &registry, &targets,
+    ) {
+        Ok(events) => events,
+        Err(error) => {
+            eprintln!("PropAMM decode failed: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    match write_ndjson(&out, &events) {
+        Ok(()) => {
+            println!("wrote {} PropAMM event rows", events.len());
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("cannot write PropAMM events: {error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 fn propamm_pair(v: Vec<String>) -> ExitCode {
     let (Some(input), Some(pairs_out), Some(blocks_out), Some(builders_out)) = (
         arg(&v, "--input"),
@@ -616,7 +682,7 @@ fn report(v: Vec<String>) -> ExitCode {
             return ExitCode::from(2);
         };
         let period = match tlm_report::ReportPeriod::parse(
-            &v.windows(2)
+            v.windows(2)
                 .find(|x| x[0] == "--period")
                 .map(|x| x[1].as_str())
                 .unwrap_or("available"),
@@ -938,17 +1004,10 @@ fn effective_tip(tx: &XatuTx, base_fee: u64) -> u64 {
         tx.gas_price.saturating_sub(base_fee)
     }
 }
+#[derive(Default)]
 struct XatuEvidence {
     transfers: u32,
     swaps: std::collections::BTreeSet<String>,
-}
-impl Default for XatuEvidence {
-    fn default() -> Self {
-        Self {
-            transfers: 0,
-            swaps: std::collections::BTreeSet::new(),
-        }
-    }
 }
 
 fn parquet_text(row: &parquet::record::Row, col: usize) -> Option<String> {

@@ -299,7 +299,7 @@ impl XatuDataset {
 
 /// Returns the public Xatu Parquet URL for a 1,000-block chunk.
 pub fn xatu_chunk_url(dataset: XatuDataset, chunk_start: BlockNumber) -> Result<String, String> {
-    if chunk_start % 1_000 != 0 {
+    if !chunk_start.is_multiple_of(1_000) {
         return Err("Xatu execution chunks must begin on a 1,000-block boundary".into());
     }
     Ok(format!(
