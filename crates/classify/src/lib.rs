@@ -1,14 +1,18 @@
 //! Deterministic transaction labels. Protocol-specific signature lists belong in config.
 
 pub mod activity;
-pub mod lifecycle;
 pub mod fee_fingerprint;
+pub mod lifecycle;
+pub mod propamm;
 pub use activity::{
     ActivityFilter, ClassifiedActivity, CompositionCounts, MempoolVisibility, PublicMempoolIndex,
     TipBucket,
 };
-pub use lifecycle::measure_mempool_lifecycle;
 pub use fee_fingerprint::{fingerprint_fee_fields, FeeFingerprint, FeeFingerprintConfig};
+pub use lifecycle::measure_mempool_lifecycle;
+pub use propamm::{
+    pair_propamm_events, summarize_propamm_blocks, summarize_propamm_builders,
+};
 
 use tlm_model::{Block, LabelConfig, MempoolSeen, Transaction, TxLabels};
 

@@ -12,6 +12,7 @@ path = "src/main.rs"
 tlm-ingest = { path = "../../crates/ingest" }
 
 serde_json = "1"
+serde = "1"
 parquet = "53"
 tlm-classify = { path = "../../crates/classify" }
 tlm-model = { path = "../../crates/model" }

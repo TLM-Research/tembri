@@ -20,11 +20,12 @@ fn main() -> ExitCode {
         Some("fetch-xatu") => fetch_xatu(a.collect()),
         Some("classify") => classify(a.collect()),
         Some("metrics") => metrics(a.collect()),
+        Some("propamm-pair") => propamm_pair(a.collect()),
         Some("mempool-lifecycle") => mempool_lifecycle(a.collect()),
         Some("run-period") => run_period(a.collect()),
         Some("report") => report(a.collect()),
         _ => {
-            println!("Usage: tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|mempool-lifecycle|run-period|report> ...");
+            println!("Usage: tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|propamm-pair|mempool-lifecycle|run-period|report> ...");
             ExitCode::from(2)
         }
     }
@@ -356,6 +357,80 @@ fn metrics(v: Vec<String>) -> ExitCode {
     println!("wrote {}", out.display());
     ExitCode::SUCCESS
 }
+
+fn propamm_pair(v: Vec<String>) -> ExitCode {
+    let (Some(input), Some(pairs_out), Some(blocks_out), Some(builders_out)) = (
+        arg(&v, "--input"),
+        arg(&v, "--pairs-out"),
+        arg(&v, "--blocks-out"),
+        arg(&v, "--builders-out"),
+    ) else {
+        eprintln!(
+            "Usage: tembri propamm-pair --input EVENTS.ndjson --pairs-out PAIRS.ndjson --blocks-out BLOCKS.ndjson --builders-out BUILDERS.ndjson"
+        );
+        return ExitCode::from(2);
+    };
+    let events = match read_ndjson::<tlm_model::PropammEvent>(&input) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid PropAMM event input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let pairs = tlm_classify::pair_propamm_events(&events);
+    let blocks = tlm_classify::summarize_propamm_blocks(&events, &pairs);
+    let builders = tlm_classify::summarize_propamm_builders(&blocks);
+    if let Err(error) = write_ndjson(&pairs_out, &pairs) {
+        eprintln!("cannot write PropAMM pairs: {error}");
+        return ExitCode::from(1);
+    }
+    if let Err(error) = write_ndjson(&blocks_out, &blocks) {
+        eprintln!("cannot write PropAMM blocks: {error}");
+        return ExitCode::from(1);
+    }
+    if let Err(error) = write_ndjson(&builders_out, &builders) {
+        eprintln!("cannot write PropAMM builders: {error}");
+        return ExitCode::from(1);
+    }
+    println!(
+        "wrote {} fill pair rows, {} block/pool rows, and {} builder rows",
+        pairs.len(),
+        blocks.len(),
+        builders.len()
+    );
+    ExitCode::SUCCESS
+}
+
+fn read_ndjson<T: serde::de::DeserializeOwned>(path: &PathBuf) -> Result<Vec<T>, String> {
+    let input = File::open(path).map_err(|error| error.to_string())?;
+    BufReader::new(input)
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| match line {
+            Ok(line) if line.trim().is_empty() => None,
+            Ok(line) => Some(
+                serde_json::from_str(&line)
+                    .map_err(|error| format!("{} line {}: {error}", path.display(), index + 1)),
+            ),
+            Err(error) => Some(Err(format!("{} line {}: {error}", path.display(), index + 1))),
+        })
+        .collect()
+}
+
+fn write_ndjson<T: serde::Serialize>(path: &PathBuf, rows: &[T]) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let body = rows
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?
+        .join("\n");
+    fs::write(path, if body.is_empty() { body } else { body + "\n" })
+        .map_err(|error| error.to_string())
+}
+
 fn read_lines(p: &PathBuf) -> Vec<String> {
     BufReader::new(File::open(p).unwrap())
         .lines()

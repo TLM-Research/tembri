@@ -1423,6 +1423,7 @@ name = "tembri"
 version = "0.1.0"
 dependencies = [
  "parquet",
+ "serde",
  "serde_json",
  "tlm-classify",
  "tlm-ingest",

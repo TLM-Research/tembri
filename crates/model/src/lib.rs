@@ -192,6 +192,80 @@ pub struct MempoolActivity {
     pub activity_type: String,
 }
 
+/// A decoded PropAMM update or fill.  This is deliberately downstream of ABI
+/// decoding: a venue-specific decoder supplies these rows, while pairing stays
+/// identical across venues and remains testable without treating a selector as
+/// evidence of a fill.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropammEvent {
+    pub block_number: BlockNumber,
+    pub pool: String,
+    pub venue: String,
+    pub builder: Option<String>,
+    pub tx_hash: String,
+    pub tx_position: u32,
+    pub cumulative_gas_before: Gas,
+    pub kind: PropammEventKind,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PropammEventKind {
+    Update,
+    Fill,
+}
+
+/// The receipt-order relationship for one PropAMM fill.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropammFillPair {
+    pub block_number: BlockNumber,
+    pub pool: String,
+    pub venue: String,
+    pub builder: Option<String>,
+    pub fill_tx_hash: String,
+    pub fill_tx_position: u32,
+    pub result: PropammPairingResult,
+    pub update_tx_hash: Option<String>,
+    pub update_tx_position: Option<u32>,
+    pub transaction_gap: Option<u32>,
+    pub gas_gap: Option<Gas>,
+    pub fills_before_next_update: u32,
+}
+
+/// A fill is retained even when no qualifying same-block update is observed.
+/// The serialized spelling is part of the report/data contract.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PropammPairingResult {
+    PropammFill,
+    PropammFillWithoutUpdate,
+}
+
+/// Same-block, same-pool PropAMM activity derived from decoded events.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropammBlockSummary {
+    pub block_number: BlockNumber,
+    pub pool: String,
+    pub venue: String,
+    pub builder: Option<String>,
+    pub updates: u32,
+    pub fills: u32,
+    pub paired_fills: u32,
+    pub fills_without_update: u32,
+}
+
+/// Builder-attribution aggregation. Builder is an execution-data signal until
+/// a verified relay/builder join is available.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropammBuilderSummary {
+    pub builder: Option<String>,
+    pub active_blocks: u32,
+    pub updates: u32,
+    pub fills: u32,
+    pub paired_fills: u32,
+    pub fills_without_update: u32,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MempoolLifecycleStatus {
     Admitted,

@@ -43,7 +43,7 @@ cargo run -p tembri -- --help
 The CLI currently exposes:
 
 ```text
-tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|mempool-lifecycle|run-period|report>
+tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|propamm-pair|mempool-lifecycle|run-period|report>
 ```
 
 ## Run an execution report
@@ -65,6 +65,21 @@ cargo run -p tembri -- report activity-tip-xatu \
 ```
 
 For reproducible execution measurements, retain the cached input partitions and record the exact configuration alongside each report.
+
+## Pair decoded PropAMM events
+
+The PropAMM pairing layer accepts ABI-decoded update/fill evidence as NDJSON. It
+does not infer events from addresses, calldata, or generic swap logs. It emits
+one row per fill, including `propamm_fill_without_update` where an earlier,
+same-pool update is absent from the block.
+
+```bash
+cargo run -p tembri -- propamm-pair \
+  --input data/propamm/events.ndjson \
+  --pairs-out data/propamm/pairs.ndjson \
+  --blocks-out data/propamm/blocks.ndjson \
+  --builders-out data/propamm/builders.ndjson
+```
 
 ## Run a lifecycle report
 
