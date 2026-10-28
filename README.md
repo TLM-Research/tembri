@@ -17,6 +17,7 @@ Tembri is a Rust toolbox for reproducible Ethereum execution and mempool measure
 - Split results by normalized transaction position and early-block regions.
 - Report builder signals derived from block `extra_data`, including block share, transaction volume, zero-tip transactions, mean tip, mean position, and tip/position correlation.
 - Ingest public-mempool observation and admission files and derive conservative lifecycle outcomes: first seen, admitted, and sender/nonce replacement before admission.
+- Decode reviewed PropAMM fill logs and Priority Update Registry signed-batch calls into typed update/fill rows; pair each fill only with an earlier update for the same block and pool.
 
 ## Important boundaries
 
@@ -29,6 +30,9 @@ Tembri is a Rust toolbox for reproducible Ethereum execution and mempool measure
 | Activity labels | Evidence-based heuristics, not a complete protocol taxonomy. “Arbitrage candidate” is deliberately conservative. |
 | Traces and direct payments | Fetch support exists, but direct builder-payment and full trace-flow analysis are still planned. |
 | Market-volatility regimes | Planned. |
+| PropAMM coverage | The decoder is rule-driven. Only reviewed address/topic rules and explicitly allow-listed registry targets are decoded; it does not discover venues or infer fills from generic transfers. |
+| PropAMM pairing | A pair proves receipt order in a block, not that an update was the newest off-chain quote or that a builder received it first. |
+| PropAMM update timestamps | Priority Update Registry signed batches carry a maker-selected timestamp. It is retained on decoded update rows but has not yet been used for quote-age or markout analysis. |
 
 ## Quick start
 
@@ -66,12 +70,39 @@ cargo run -p tembri -- report activity-tip-xatu \
 
 For reproducible execution measurements, retain the cached input partitions and record the exact configuration alongside each report.
 
-## Pair decoded PropAMM events
+## PropAMM P0: reviewed evidence → pairing
 
-The PropAMM pairing layer accepts ABI-decoded update/fill evidence as NDJSON. It
-does not infer events from addresses, calldata, or generic swap logs. It emits
-one row per fill, including `propamm_fill_without_update` where an earlier,
-same-pool update is absent from the block.
+The P0 workflow separates contract-specific evidence from measurement. First,
+project execution data into calls and logs, then decode only reviewed evidence;
+finally pair the resulting update/fill rows. The output keeps unmatched fills
+instead of silently dropping them.
+
+```text
+PropammLog + PropammCall + reviewed rules
+                 │
+                 ▼
+          propamm-decode
+                 │  PropammEvent NDJSON
+                 ▼
+           propamm-pair
+                 │
+                 ├── pairs.ndjson
+                 ├── blocks.ndjson
+                 └── builders.ndjson
+```
+
+`config/labels.toml` records the currently reviewed mainnet entrypoints,
+registry targets, and event topic. Address validation does not by itself prove
+pool topology or an ABI, so new rules require independent ABI and sample-log
+review.
+
+### Pair decoded events
+
+The pairing layer accepts decoded update/fill evidence as NDJSON. It emits one
+row per fill, including `propamm_fill_without_update` where an earlier,
+same-pool update is absent from the block. Paired rows include transaction-index
+and cumulative-gas gaps; block/pool and builder-signal summaries retain paired
+and unmatched counts.
 
 ```bash
 cargo run -p tembri -- propamm-pair \
@@ -81,7 +112,7 @@ cargo run -p tembri -- propamm-pair \
   --builders-out data/propamm/builders.ndjson
 ```
 
-## Decode reviewed PropAMM evidence
+### Decode reviewed evidence
 
 Project execution data into `PropammLog` and `PropammCall` NDJSON, then supply
 only reviewed exact-match fill rules and registry targets. This command emits
@@ -96,6 +127,18 @@ cargo run -p tembri -- propamm-decode \
   --registry-targets data/propamm/registry_targets.ndjson \
   --out data/propamm/events.ndjson
 ```
+
+The reviewed input types are newline-delimited JSON:
+
+```json
+{"emitter":"0x…","topic0":"0x…","venue":"fermiswap","pool":"0x…","kind":"fill"}
+{"target":"0x…","venue":"tempest","pool":"0x…"}
+```
+
+The first row is a fill rule and the second is a registry target. `PropammLog`
+and `PropammCall` also require block number, transaction hash/index,
+`cumulative_gas_before`, and builder signal; calls additionally carry `to` and
+calldata `input`. See the shared model types for the complete schema.
 
 ## Run a lifecycle report
 
@@ -144,6 +187,8 @@ The lifecycle report includes first-seen-to-admission delay where the inputs per
 - Broader, evaluated activity taxonomy: liquidations, protocol-specific arbitrage, lending, bridges, NFT activity, and DeFi trading.
 - Direct-payment and trace-flow measurement.
 - Volatility and gas-demand regimes.
+- PropAMM golden blocks, additional reviewed venue/event decoders, bytecode grouping, and daily pairing reports.
+- Quote-age, outside-mid, markout, taker-class, and public/private-route measurements for PropAMMs.
 - Label-quality evaluation set and versioned label datasets.
 
 ## Data sources and acknowledgements
