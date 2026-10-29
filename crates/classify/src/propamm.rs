@@ -5,13 +5,51 @@
 //! receipt order, not quote freshness or an off-chain builder receipt time.
 
 use std::collections::BTreeMap;
+use tiny_keccak::{Hasher, Keccak};
 use tlm_model::{
-    PropammBlockSummary, PropammBuilderSummary, PropammEvent, PropammEventKind, PropammEventRule,
-    PropammFillPair, PropammLog, PropammPairingResult, PropammCall, PropammRegistryTarget,
+    BytecodeGroup, BytecodeRow, PropammBlockSummary, PropammBuilderSummary, PropammCall,
+    PropammEvent, PropammEventKind, PropammEventRule, PropammFillPair, PropammLog,
+    PropammPairingResult, PropammRegistryTarget,
 };
 
 /// Selector for `batchUpdateStateWithSignature((address,address,uint256,uint32,uint256[],bytes)[])`.
 pub const REGISTRY_BATCH_UPDATE_SELECTOR: &str = "0xe50de8ea";
+
+/// Group contracts by the Keccak-256 hash of their exact runtime bytecode.
+pub fn group_runtime_bytecode(rows: &[BytecodeRow]) -> Result<Vec<BytecodeGroup>, String> {
+    let mut groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for row in rows {
+        let code = hex_bytes(row.runtime_bytecode.trim_start_matches("0x"))?;
+        if code.is_empty() {
+            return Err(format!("{} has empty runtime bytecode", row.address));
+        }
+        let mut hash = [0u8; 32];
+        let mut keccak = Keccak::v256();
+        keccak.update(&code);
+        keccak.finalize(&mut hash);
+        let hash = format!(
+            "0x{}",
+            hash.iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        );
+        groups
+            .entry(hash)
+            .or_default()
+            .push(row.address.to_ascii_lowercase());
+    }
+    Ok(groups
+        .into_iter()
+        .map(|(code_hash, mut addresses)| {
+            addresses.sort();
+            addresses.dedup();
+            BytecodeGroup {
+                code_hash,
+                addresses,
+            }
+        })
+        .collect())
+}
 
 /// Decode reviewed targets from the registry's signed-update batch calldata.
 ///
@@ -508,6 +546,44 @@ mod tests {
         assert!(decode_propamm_activity(&[log], &[], &[rule.clone(), rule], "0xregistry", &[])
             .unwrap_err()
             .contains("overlapping"));
+    }
+
+    #[test]
+    fn groups_exact_runtime_bytecode_by_keccak_hash() {
+        let groups = group_runtime_bytecode(&[
+            BytecodeRow {
+                address: "0xB".into(),
+                runtime_bytecode: "0x00".into(),
+            },
+            BytecodeRow {
+                address: "0xa".into(),
+                runtime_bytecode: "00".into(),
+            },
+            BytecodeRow {
+                address: "0xc".into(),
+                runtime_bytecode: "0x01".into(),
+            },
+        ])
+        .unwrap();
+        assert_eq!(groups.len(), 2);
+        let zero_byte_group = groups
+            .iter()
+            .find(|group| {
+                group.code_hash
+                    == "0xbc36789e7a1e281436464229828f817d6612f7b477d66591ff96a9e064bcc98a"
+            })
+            .expect("0x00 bytecode group");
+        assert_eq!(
+            zero_byte_group.code_hash,
+            "0xbc36789e7a1e281436464229828f817d6612f7b477d66591ff96a9e064bcc98a"
+        );
+        assert_eq!(zero_byte_group.addresses, ["0xa", "0xb"]);
+        assert!(group_runtime_bytecode(&[BytecodeRow {
+            address: "0xempty".into(),
+            runtime_bytecode: "0x".into(),
+        }])
+        .unwrap_err()
+        .contains("empty"));
     }
 
     #[test]

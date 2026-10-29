@@ -12,7 +12,8 @@ pub use fee_fingerprint::{fingerprint_fee_fields, FeeFingerprint, FeeFingerprint
 pub use lifecycle::measure_mempool_lifecycle;
 pub use propamm::{
     decode_propamm_activity, decode_propamm_log, decode_registry_batch_updates, pair_propamm_events,
-    summarize_propamm_blocks, summarize_propamm_builders, REGISTRY_BATCH_UPDATE_SELECTOR,
+    group_runtime_bytecode, summarize_propamm_blocks, summarize_propamm_builders,
+    REGISTRY_BATCH_UPDATE_SELECTOR,
 };
 
 use tlm_model::{Block, LabelConfig, MempoolSeen, Transaction, TxLabels};

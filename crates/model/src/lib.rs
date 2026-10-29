@@ -256,6 +256,21 @@ pub struct PropammRegistryTarget {
     pub pool: String,
 }
 
+/// Runtime bytecode collected from a deployed contract at a stated block.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BytecodeRow {
+    pub address: String,
+    pub runtime_bytecode: String,
+}
+
+/// Exact runtime-bytecode group. Membership is discovery evidence only; it
+/// does not assign a protocol or infer that the contracts are interchangeable.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BytecodeGroup {
+    pub code_hash: String,
+    pub addresses: Vec<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PropammEventKind {

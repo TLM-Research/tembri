@@ -6,3 +6,4 @@ license.workspace = true
 
 [dependencies]
 tlm-model = { path = "../model" }
+tiny-keccak = { version = "2", features = ["keccak"] }

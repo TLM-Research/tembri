@@ -1,4 +1,5 @@
 use parquet::{
+    basic::Type as ParquetPhysicalType,
     file::reader::{FileReader, SerializedFileReader},
     record::RowAccessor,
 };
@@ -20,13 +21,14 @@ fn main() -> ExitCode {
         Some("fetch-xatu") => fetch_xatu(a.collect()),
         Some("classify") => classify(a.collect()),
         Some("metrics") => metrics(a.collect()),
+        Some("propamm-bytecode-group") => propamm_bytecode_group(a.collect()),
         Some("propamm-decode") => propamm_decode(a.collect()),
         Some("propamm-pair") => propamm_pair(a.collect()),
         Some("mempool-lifecycle") => mempool_lifecycle(a.collect()),
         Some("run-period") => run_period(a.collect()),
         Some("report") => report(a.collect()),
         _ => {
-            println!("Usage: tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|propamm-decode|propamm-pair|mempool-lifecycle|run-period|report> ...");
+            println!("Usage: tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|propamm-bytecode-group|propamm-decode|propamm-pair|mempool-lifecycle|run-period|report> ...");
             ExitCode::from(2)
         }
     }
@@ -357,6 +359,39 @@ fn metrics(v: Vec<String>) -> ExitCode {
         .unwrap();
     println!("wrote {}", out.display());
     ExitCode::SUCCESS
+}
+
+fn propamm_bytecode_group(v: Vec<String>) -> ExitCode {
+    let (Some(input), Some(out)) = (arg(&v, "--input"), arg(&v, "--out")) else {
+        eprintln!(
+            "Usage: tembri propamm-bytecode-group --input BYTECODE.ndjson --out GROUPS.ndjson"
+        );
+        return ExitCode::from(2);
+    };
+    let rows = match read_ndjson::<tlm_model::BytecodeRow>(&input) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid bytecode input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let groups = match tlm_classify::group_runtime_bytecode(&rows) {
+        Ok(groups) => groups,
+        Err(error) => {
+            eprintln!("bytecode grouping failed: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    match write_ndjson(&out, &groups) {
+        Ok(()) => {
+            println!("wrote {} exact-bytecode groups", groups.len());
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("cannot write bytecode groups: {error}");
+            ExitCode::from(1)
+        }
+    }
 }
 
 fn propamm_decode(v: Vec<String>) -> ExitCode {
@@ -814,6 +849,57 @@ fn activity_tip_report(input: &PathBuf, out: &PathBuf) -> Result<(), String> {
     fs::write(out, markdown).map_err(|e| e.to_string())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{base_fee_column_index, validated_base_fee};
+
+    #[test]
+    fn finds_base_fee_by_name_in_legacy_xatu_block_schema() {
+        let fields = [
+            ("slot", true),
+            ("proposer_index", true),
+            ("block_number", true),
+            ("block_hash", false),
+            ("parent_hash", false),
+            ("gas_used", true),
+            ("gas_limit", true),
+            ("extra_data", false),
+            ("base_fee_per_gas", true),
+            ("meta_network_id", true),
+        ];
+        assert_eq!(base_fee_column_index(&fields), Ok(8));
+    }
+
+    #[test]
+    fn finds_base_fee_by_name_in_current_xatu_block_schema() {
+        let fields = [
+            ("slot", true),
+            ("proposer_index", true),
+            ("block_number", true),
+            ("block_hash", false),
+            ("parent_hash", false),
+            ("gas_used", true),
+            ("gas_limit", true),
+            ("extra_data", false),
+            ("extra_data_string", false),
+            ("base_fee_per_gas", true),
+        ];
+        assert_eq!(base_fee_column_index(&fields), Ok(9));
+    }
+
+    #[test]
+    fn rejects_missing_or_incompatible_base_fee_field() {
+        assert!(base_fee_column_index(&[("meta_network_id", true)]).is_err());
+        assert!(base_fee_column_index(&[("base_fee_per_gas", false)]).is_err());
+    }
+
+    #[test]
+    fn rejects_zero_base_fee() {
+        assert!(validated_base_fee(0).is_err());
+        assert_eq!(validated_base_fee(1), Ok(1));
+    }
+}
+
 fn fetch_xatu(v: Vec<String>) -> ExitCode {
     let get = |k: &str| v.windows(2).find(|x| x[0] == k).map(|x| x[1].clone());
     let (Some(from), Some(to)) = (
@@ -1071,6 +1157,47 @@ fn xatu_reader(path: &PathBuf) -> Result<SerializedFileReader<File>, String> {
     SerializedFileReader::new(File::open(path).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())
 }
+
+/// Resolve this field by its stable schema name. Xatu's historical block schemas
+/// place it at different physical positions, so a positional lookup can silently
+/// read `meta_network_id` as a base fee.
+fn base_fee_column_index(columns: &[(&str, bool)]) -> Result<usize, String> {
+    let Some((index, (_, is_int64))) = columns
+        .iter()
+        .enumerate()
+        .find(|(_, (name, _))| *name == "base_fee_per_gas")
+    else {
+        return Err("Xatu blocks schema is missing base_fee_per_gas".into());
+    };
+    if !is_int64 {
+        return Err("Xatu blocks base_fee_per_gas must have INT64 physical type".into());
+    }
+    Ok(index)
+}
+
+fn xatu_base_fee_column(reader: &SerializedFileReader<File>) -> Result<usize, String> {
+    let columns: Vec<_> = reader
+        .metadata()
+        .file_metadata()
+        .schema_descr()
+        .columns()
+        .iter()
+        .map(|column| {
+            (
+                column.name(),
+                column.physical_type() == ParquetPhysicalType::INT64,
+            )
+        })
+        .collect();
+    base_fee_column_index(&columns)
+}
+
+fn validated_base_fee(value: u64) -> Result<u64, String> {
+    if value == 0 {
+        return Err("Xatu blocks base_fee_per_gas is zero".into());
+    }
+    Ok(value)
+}
 fn xatu_evidence(
     log_path: &PathBuf,
     plan: &tlm_report::ReportPlan,
@@ -1104,6 +1231,7 @@ fn activity_tip_xatu_report(plan: &tlm_report::ReportPlan, out: &PathBuf) -> Res
     let mut blocks: HashMap<u64, XatuBlock> = HashMap::new();
     for path in xatu_plan_files(plan, "blocks")? {
         let reader = xatu_reader(&path)?;
+        let base_fee_column = xatu_base_fee_column(&reader)?;
         for row in reader.get_row_iter(None).map_err(|e| e.to_string())? {
             let row = row.map_err(|e| e.to_string())?;
             let number = parquet_u64(&row, 2)?;
@@ -1118,9 +1246,7 @@ fn activity_tip_xatu_report(plan: &tlm_report::ReportPlan, out: &PathBuf) -> Res
                 number,
                 XatuBlock {
                     gas_used: parquet_u64(&row, 5).unwrap_or(0),
-                    // Xatu blocks schema: column 9 is base_fee_per_gas; column 8 is extra_data_string.
-                    // Do not default this field: a zero base fee invalidates effective-tip measurement.
-                    base_fee: parquet_u64(&row, 9)?,
+                    base_fee: validated_base_fee(parquet_u64(&row, base_fee_column)?)?,
                     builder_signal: parquet_text(&row, 7)
                         .map(builder_name)
                         .filter(|s| !s.is_empty())

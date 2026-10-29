@@ -47,7 +47,7 @@ cargo run -p tembri -- --help
 The CLI currently exposes:
 
 ```text
-tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|propamm-decode|propamm-pair|mempool-lifecycle|run-period|report>
+tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|propamm-bytecode-group|propamm-decode|propamm-pair|mempool-lifecycle|run-period|report>
 ```
 
 ## Run an execution report
@@ -95,6 +95,18 @@ PropammLog + PropammCall + reviewed rules
 registry targets, and event topic. Address validation does not by itself prove
 pool topology or an ABI, so new rules require independent ABI and sample-log
 review.
+
+### Group exact runtime bytecode
+
+Use runtime bytecode fetched at one stated block to identify exact implementation
+matches. A group is discovery evidence only: it does not label a contract as a
+PropAMM or prove that two contracts share pool configuration.
+
+```bash
+cargo run -p tembri -- propamm-bytecode-group \
+  --input data/propamm/runtime_bytecode.ndjson \
+  --out data/propamm/bytecode_groups.ndjson
+```
 
 ### Pair decoded events
 
