@@ -3,6 +3,7 @@
 pub mod activity;
 pub mod fee_fingerprint;
 pub mod lifecycle;
+pub mod markout;
 pub mod propamm;
 pub mod reference_price;
 pub use activity::{
@@ -11,6 +12,7 @@ pub use activity::{
 };
 pub use fee_fingerprint::{fingerprint_fee_fields, FeeFingerprint, FeeFingerprintConfig};
 pub use lifecycle::measure_mempool_lifecycle;
+pub use markout::propamm_markouts;
 pub use reference_price::{
     decode_reference_swap, reference_block_closes, reference_mid_before, REFERENCE_POOL,
     UNISWAP_V3_SWAP_TOPIC,
@@ -18,9 +20,9 @@ pub use reference_price::{
 pub use propamm::{
     add_period_blocks, add_quote_ages,
     decode_propamm_activity, decode_propamm_log, decode_registry_batch_updates,
-    decode_registry_direct_update, group_runtime_bytecode, pair_propamm_events,
+    decode_registry_direct_update, decode_swapped_terms, group_runtime_bytecode, pair_propamm_events,
     summarize_propamm_blocks, summarize_propamm_builders, REGISTRY_BATCH_UPDATE_SELECTOR,
-    REGISTRY_UPDATE_STATE_SELECTOR,
+    REGISTRY_UPDATE_STATE_SELECTOR, SWAPPED_TOPIC,
 };
 
 use tlm_model::{Block, LabelConfig, MempoolSeen, Transaction, TxLabels};

@@ -64,6 +64,8 @@ pub(crate) struct XatuLogRow {
     pub log_index: u32,
     pub address: String,
     pub topic0: String,
+    /// `topic1..topic3`, as present.
+    pub topics: Vec<String>,
     pub data: Option<String>,
 }
 
@@ -209,6 +211,8 @@ pub(crate) fn project_propamm_rows(
             log_index: log.log_index,
             topic0: log.topic0.to_ascii_lowercase(),
             builder: headers[&log.block_number].builder.clone(),
+            topics: log.topics.clone(),
+            data: log.data.clone(),
         });
     }
     Ok((projected_logs, calls))
@@ -505,13 +509,24 @@ fn read_logs(
     selected: &impl Fn(u64) -> bool,
 ) -> Result<Vec<XatuLogRow>, String> {
     let reader = xatu_reader(path)?;
-    let [number, tx_index, tx_hash, log_index, address, topic0, data] = columns(
+    let [number, tx_index, tx_hash, log_index, address, topic0, topic1, topic2, topic3, data] = columns(
         &reader,
         path,
-        &["block_number", "transaction_index", "transaction_hash", "log_index", "address", "topic0", "data"],
+        &[
+            "block_number",
+            "transaction_index",
+            "transaction_hash",
+            "log_index",
+            "address",
+            "topic0",
+            "topic1",
+            "topic2",
+            "topic3",
+            "data",
+        ],
     )?[..]
     else {
-        unreachable!("seven columns requested")
+        unreachable!("ten columns requested")
     };
     let mut logs = Vec::new();
     for row in reader.get_row_iter(None).map_err(|e| e.to_string())? {
@@ -533,6 +548,10 @@ fn read_logs(
             log_index: u32::try_from(parquet_u64(&row, log_index)?).map_err(|e| e.to_string())?,
             address: emitter,
             topic0: parquet_text(&row, topic0).unwrap_or_default(),
+            topics: [topic1, topic2, topic3]
+                .into_iter()
+                .map_while(|column| parquet_text(&row, column))
+                .collect(),
             data: parquet_text(&row, data),
         });
     }
@@ -566,6 +585,7 @@ mod tests {
             log_index: 7,
             address: address.into(),
             topic0: "0xTOPIC".into(),
+            topics: Vec::new(),
             data: None,
         }
     }

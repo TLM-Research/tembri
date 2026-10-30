@@ -27,11 +27,12 @@ fn main() -> ExitCode {
         Some("propamm-project") => propamm_project_cmd(a.collect()),
         Some("propamm-decode") => propamm_decode(a.collect()),
         Some("propamm-pair") => propamm_pair(a.collect()),
+        Some("propamm-markouts") => propamm_markouts(a.collect()),
         Some("mempool-lifecycle") => mempool_lifecycle(a.collect()),
         Some("run-period") => run_period(a.collect()),
         Some("report") => report(a.collect()),
         _ => {
-            println!("Usage: tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|propamm-bytecode-group|propamm-project|propamm-decode|propamm-pair|mempool-lifecycle|run-period|report> ...");
+            println!("Usage: tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|propamm-bytecode-group|propamm-project|propamm-decode|propamm-pair|propamm-markouts|mempool-lifecycle|run-period|report> ...");
             ExitCode::from(2)
         }
     }
@@ -559,6 +560,59 @@ fn propamm_decode(v: Vec<String>) -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+fn propamm_markouts(v: Vec<String>) -> ExitCode {
+    let (Some(events_path), Some(reference_path), Some(closes_path), Some(out)) = (
+        arg(&v, "--events"),
+        arg(&v, "--reference"),
+        arg(&v, "--reference-blocks"),
+        arg(&v, "--out"),
+    ) else {
+        eprintln!(
+            "Usage: tembri propamm-markouts --events EVENTS.ndjson --reference PRICES.ndjson --reference-blocks CLOSES.ndjson --out MARKOUTS.ndjson"
+        );
+        return ExitCode::from(2);
+    };
+    let events = match read_ndjson::<tlm_model::PropammEvent>(&events_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid PropAMM event input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let mut points = match read_ndjson::<tlm_model::ReferencePricePoint>(&reference_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid reference price input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    points.sort_by_key(|point| (point.block_number, point.tx_position, point.log_index));
+    let closes = match read_ndjson::<tlm_model::ReferenceBlockPrice>(&closes_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid reference block input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let rows = match tlm_classify::propamm_markouts(&events, &points, &closes) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("PropAMM markouts failed: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    if let Err(error) = write_ndjson(&out, &rows) {
+        eprintln!("cannot write PropAMM markouts: {error}");
+        return ExitCode::from(1);
+    }
+    let fills = events
+        .iter()
+        .filter(|event| event.kind == tlm_model::PropammEventKind::Fill)
+        .count();
+    println!("wrote {} WETH/stablecoin markout rows of {fills} fills", rows.len());
+    ExitCode::SUCCESS
 }
 
 fn propamm_pair(v: Vec<String>) -> ExitCode {

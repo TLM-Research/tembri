@@ -209,6 +209,22 @@ pub struct PropammEvent {
     #[serde(default)]
     pub update_timestamp: Option<u64>,
     pub kind: PropammEventKind,
+    /// Terms of a fill decoded from the reviewed `IPropAMM.Swapped` event.
+    #[serde(default)]
+    pub fill: Option<PropammFillTerms>,
+}
+
+/// `Swapped(sender, tokenIn, tokenOut, amountIn, amountOut, recipient)` as
+/// declared by the verified `IPropAMM` interface (El Zorro, BopAmm).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropammFillTerms {
+    pub log_index: u32,
+    pub sender: String,
+    pub token_in: String,
+    pub token_out: String,
+    pub amount_in: u128,
+    pub amount_out: u128,
+    pub recipient: String,
 }
 
 /// A log projected from execution data before venue-specific decoding.
@@ -222,6 +238,11 @@ pub struct PropammLog {
     pub log_index: u32,
     pub topic0: String,
     pub builder: Option<String>,
+    /// `topic1..topic3`, as present.
+    #[serde(default)]
+    pub topics: Vec<String>,
+    #[serde(default)]
+    pub data: Option<String>,
 }
 
 /// A transaction projected from execution data for calldata-level decoding.
@@ -372,6 +393,40 @@ pub struct ReferencePricePoint {
     pub sqrt_price_x96: String,
     /// Quote-token units per base-token unit (USDC per WETH for the reviewed pool).
     pub price: f64,
+}
+
+/// Taker-signed markouts of one WETH/stablecoin PropAMM fill against the
+/// on-chain reference price. Positive means the taker gained (adverse
+/// selection for the maker). `ref_block_*` is the block of the reference swap
+/// behind each price, so stale references can be filtered.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PropammMarkout {
+    pub block_number: BlockNumber,
+    pub venue: String,
+    pub pool: String,
+    pub builder: Option<String>,
+    pub fill_tx_hash: String,
+    pub fill_tx_position: u32,
+    pub log_index: u32,
+    pub sender: String,
+    pub recipient: String,
+    /// `buy_weth` or `sell_weth`, from the taker's side.
+    pub taker_side: String,
+    /// `usdc` or `usdt`; USDT is priced as USDC.
+    pub stable: String,
+    pub weth_amount: f64,
+    pub stable_amount: f64,
+    /// Stablecoin per WETH.
+    pub fill_price: f64,
+    pub mid_at_fill: Option<f64>,
+    pub ref_block_at_fill: Option<BlockNumber>,
+    pub markout_0_bp: Option<f64>,
+    pub markout_1_bp: Option<f64>,
+    pub ref_block_1: Option<BlockNumber>,
+    pub markout_5_bp: Option<f64>,
+    pub ref_block_5: Option<BlockNumber>,
+    pub markout_25_bp: Option<f64>,
+    pub ref_block_25: Option<BlockNumber>,
 }
 
 /// The reference price at the close of each period block. A block without a

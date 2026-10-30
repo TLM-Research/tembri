@@ -8,12 +8,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use tiny_keccak::{Hasher, Keccak};
 use tlm_model::{
     BytecodeGroup, BytecodeRow, PropammBlockSummary, PropammBuilderSummary, PropammCall,
-    PropammEvent, PropammEventKind, PropammEventRule, PropammFillPair, PropammLog,
+    PropammEvent, PropammEventKind, PropammEventRule, PropammFillTerms, PropammFillPair, PropammLog,
     PropammPairingResult, PropammPeriodBlock, PropammRegistryTarget,
 };
 
 /// Selector for `batchUpdateStateWithSignature((address,address,uint256,uint32,uint256[],bytes)[])`.
 pub const REGISTRY_BATCH_UPDATE_SELECTOR: &str = "0xe50de8ea";
+/// `Swapped(address,address,address,uint256,uint256,address)` from the
+/// verified `IPropAMM` interface, emitted by FermiSwap, El Zorro and bopAMM.
+pub const SWAPPED_TOPIC: &str = "0x1eeaa4acf3c225a4033105c2647625dbb298dec93b14e16253c4231e26c02b1d";
 /// Selector for `updateState(address,uint256,uint32,uint256[])`.
 pub const REGISTRY_UPDATE_STATE_SELECTOR: &str = "0xa9114b0f";
 
@@ -106,6 +109,7 @@ pub fn decode_registry_batch_updates(
             cumulative_gas_before: call.cumulative_gas_before,
             update_timestamp: Some(timestamp.into()),
             kind: registry_write_kind(call, label),
+            fill: None,
         });
     }
     Ok(events)
@@ -157,6 +161,7 @@ pub fn decode_registry_direct_update(
         cumulative_gas_before: call.cumulative_gas_before,
         update_timestamp: Some(timestamp.into()),
         kind: registry_write_kind(call, label),
+        fill: None,
     }])
 }
 
@@ -195,7 +200,16 @@ pub fn decode_propamm_activity(
             .collect();
         match matches.len() {
             0 => {}
-            1 => events.push(matches.into_iter().next().expect("one match")),
+            1 => {
+                let mut event = matches.into_iter().next().expect("one match");
+                if event.kind == PropammEventKind::Fill
+                    && log.topic0.eq_ignore_ascii_case(SWAPPED_TOPIC)
+                    && log.data.is_some()
+                {
+                    event.fill = Some(decode_swapped_terms(log)?);
+                }
+                events.push(event)
+            }
             _ => {
                 return Err(format!(
                     "overlapping PropAMM fill rules for {} log {}",
@@ -229,6 +243,46 @@ pub fn decode_propamm_activity(
             })
     });
     Ok(events)
+}
+
+/// Decode `Swapped(sender indexed, tokenIn indexed, tokenOut indexed,
+/// amountIn, amountOut, recipient)`. Amounts above `u128` are rejected.
+pub fn decode_swapped_terms(log: &PropammLog) -> Result<PropammFillTerms, String> {
+    let context = || format!("Swapped log {} in {}", log.log_index, log.tx_hash);
+    let [sender, token_in, token_out] = &log.topics[..] else {
+        return Err(format!("{} has {} indexed topics, expected 3", context(), log.topics.len()));
+    };
+    let topic_address = |topic: &str| -> Result<String, String> {
+        let bytes = hex_bytes(topic.trim_start_matches("0x")).map_err(|error| format!("{}: {error}", context()))?;
+        if bytes.len() != 32 || bytes[..12].iter().any(|byte| *byte != 0) {
+            return Err(format!("{} has a topic that is not an address", context()));
+        }
+        abi_address(&bytes, 0)
+    };
+    let data = hex_bytes(log.data.as_deref().unwrap_or("0x").trim_start_matches("0x"))
+        .map_err(|error| format!("{}: {error}", context()))?;
+    if data.len() != 96 {
+        return Err(format!("{} has {} data bytes, expected 96", context(), data.len()));
+    }
+    let amount = |offset: usize| -> Result<u128, String> {
+        let word = abi_word(&data, offset)?;
+        if word[..16].iter().any(|byte| *byte != 0) {
+            return Err(format!("{} has an amount above u128", context()));
+        }
+        Ok(u128::from_be_bytes(word[16..].try_into().expect("sixteen bytes")))
+    };
+    if abi_word(&data, 64)?[..12].iter().any(|byte| *byte != 0) {
+        return Err(format!("{} has a recipient that is not an address", context()));
+    }
+    Ok(PropammFillTerms {
+        log_index: log.log_index,
+        sender: topic_address(sender)?,
+        token_in: topic_address(token_in)?,
+        token_out: topic_address(token_out)?,
+        amount_in: amount(0)?,
+        amount_out: amount(32)?,
+        recipient: abi_address(&data, 64)?,
+    })
 }
 
 fn hex_bytes(value: &str) -> Result<Vec<u8>, String> {
@@ -291,6 +345,7 @@ pub fn decode_propamm_log(log: &PropammLog, rule: &PropammEventRule) -> Option<P
             cumulative_gas_before: log.cumulative_gas_before,
             update_timestamp: None,
             kind: rule.kind.clone(),
+            fill: None,
         })
 }
 
@@ -564,6 +619,7 @@ mod tests {
             cumulative_gas_before: gas,
             update_timestamp: None,
             kind,
+            fill: None,
         }
     }
 
@@ -578,6 +634,8 @@ mod tests {
             log_index: 4,
             topic0: "0xTopic".into(),
             builder: Some("titan".into()),
+            topics: Vec::new(),
+            data: None,
         };
         let rule = PropammEventRule {
             emitter: "0xfermi".into(),
@@ -716,6 +774,8 @@ mod tests {
             topic0: "0x1eeaa4acf3c225a4033105c2647625dbb298dec93b14e16253c4231e26c02b1d"
                 .into(),
             builder: Some("buildernet".into()),
+            topics: Vec::new(),
+            data: None,
         }];
         let events = decode_propamm_activity(
             &logs,
@@ -780,6 +840,8 @@ mod tests {
             log_index,
             topic0: if emitter == ENGINE { ENGINE_UPDATE } else { SWAPPED }.into(),
             builder: builder.clone(),
+            topics: Vec::new(),
+            data: None,
         };
         let logs = [
             log(ENGINE, "0x8aaa37b83464c5ba28d2014ad04f23e6e6096038a8e40bc3063f834336161242", 161, 22_735_744, 1438),
@@ -894,6 +956,8 @@ mod tests {
             log_index,
             topic0: SWAPPED.into(),
             builder: builder.clone(),
+            topics: Vec::new(),
+            data: None,
         };
         let logs = [
             log("0xd06c1205b44580e645ca8fd4f2e90efd585f727af480141230ace44bf45a04a0", 3, 1_159_621, 38),
@@ -977,6 +1041,8 @@ mod tests {
             log_index: 0,
             topic0: "0xfilltopic".into(),
             builder: Some("titan".into()),
+            topics: Vec::new(),
+            data: None,
         };
         let events = decode_propamm_activity(
             &[fill_log],
@@ -1013,6 +1079,8 @@ mod tests {
             log_index: 0,
             topic0: "0xtopic".into(),
             builder: None,
+            topics: Vec::new(),
+            data: None,
         };
         let rule = PropammEventRule {
             emitter: "0xpool".into(),
@@ -1285,5 +1353,35 @@ mod tests {
         assert_eq!(add_quote_ages(&pairs, &period(Some(990))).unwrap()[1].quote_age_seconds, Some(-10));
         assert_eq!(add_quote_ages(&pairs, &period(None)).unwrap()[1].quote_age_seconds, None);
         assert!(add_quote_ages(&pairs, &[]).is_err());
+    }
+
+    #[test]
+    fn decodes_swapped_terms_and_rejects_malformed_logs() {
+        let topic = |address: &str| format!("0x{:0>64}", address.trim_start_matches("0x"));
+        let word = |value: u128| format!("{value:064x}");
+        let mut log = PropammLog {
+            block_number: 10,
+            emitter: "0xpool".into(),
+            tx_hash: "0xfill".into(),
+            tx_position: 2,
+            cumulative_gas_before: 0,
+            log_index: 9,
+            topic0: SWAPPED_TOPIC.into(),
+            builder: None,
+            topics: vec![topic("0x01"), topic("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"), topic("0x02")],
+            data: Some(format!("0x{}{}{:0>64}", word(2_000_000_000), word(u128::MAX), "03")),
+        };
+        let terms = decode_swapped_terms(&log).unwrap();
+        assert_eq!(terms.log_index, 9);
+        assert_eq!(terms.sender, format!("0x{:0>40}", "01"));
+        assert_eq!(terms.token_in, "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48");
+        assert_eq!((terms.amount_in, terms.amount_out), (2_000_000_000, u128::MAX));
+        assert_eq!(terms.recipient, format!("0x{:0>40}", "03"));
+
+        let mut too_large = log.clone();
+        too_large.data = Some(format!("0x{}{}{}", "1".repeat(64), word(1), word(3)));
+        assert!(decode_swapped_terms(&too_large).is_err());
+        log.topics.pop();
+        assert!(decode_swapped_terms(&log).is_err());
     }
 }
