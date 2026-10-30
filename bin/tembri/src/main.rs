@@ -28,11 +28,12 @@ fn main() -> ExitCode {
         Some("propamm-decode") => propamm_decode(a.collect()),
         Some("propamm-pair") => propamm_pair(a.collect()),
         Some("propamm-markouts") => propamm_markouts(a.collect()),
+        Some("propamm-cex-markouts") => propamm_cex_markouts(a.collect()),
         Some("mempool-lifecycle") => mempool_lifecycle(a.collect()),
         Some("run-period") => run_period(a.collect()),
         Some("report") => report(a.collect()),
         _ => {
-            println!("Usage: tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|propamm-bytecode-group|propamm-project|propamm-decode|propamm-pair|propamm-markouts|mempool-lifecycle|run-period|report> ...");
+            println!("Usage: tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|propamm-bytecode-group|propamm-project|propamm-decode|propamm-pair|propamm-markouts|propamm-cex-markouts|mempool-lifecycle|run-period|report> ...");
             ExitCode::from(2)
         }
     }
@@ -612,6 +613,72 @@ fn propamm_markouts(v: Vec<String>) -> ExitCode {
         .filter(|event| event.kind == tlm_model::PropammEventKind::Fill)
         .count();
     println!("wrote {} WETH/stablecoin markout rows of {fills} fills", rows.len());
+    ExitCode::SUCCESS
+}
+
+/// Load comma-separated Binance kline CSV files into one series.
+fn read_cex_series(paths: &str) -> Result<tlm_classify::CexSeries, String> {
+    let mut series = tlm_classify::CexSeries::default();
+    for path in paths.split(',') {
+        let csv = fs::read_to_string(path).map_err(|error| format!("{path}: {error}"))?;
+        series.add_binance_klines(&csv).map_err(|error| format!("{path}: {error}"))?;
+    }
+    Ok(series)
+}
+
+fn propamm_cex_markouts(v: Vec<String>) -> ExitCode {
+    let value = |name: &str| v.windows(2).find(|window| window[0] == name).map(|window| window[1].clone());
+    let (Some(events_path), Some(period_path), Some(eth_usdt), Some(usdc_usdt), Some(out)) = (
+        arg(&v, "--events"),
+        arg(&v, "--period-blocks"),
+        value("--eth-usdt"),
+        value("--usdc-usdt"),
+        arg(&v, "--out"),
+    ) else {
+        eprintln!(
+            "Usage: tembri propamm-cex-markouts --events EVENTS.ndjson --period-blocks BLOCKS.ndjson --eth-usdt KLINES.csv[,KLINES.csv] --usdc-usdt KLINES.csv[,KLINES.csv] --out MARKOUTS.ndjson"
+        );
+        return ExitCode::from(2);
+    };
+    let events = match read_ndjson::<tlm_model::PropammEvent>(&events_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid PropAMM event input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let period = match read_ndjson::<tlm_model::PropammPeriodBlock>(&period_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid period block input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let (eth_usdt, usdc_usdt) = match (read_cex_series(&eth_usdt), read_cex_series(&usdc_usdt)) {
+        (Ok(eth), Ok(usdc)) => (eth, usdc),
+        (Err(error), _) | (_, Err(error)) => {
+            eprintln!("invalid Binance kline input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let rows = match tlm_classify::propamm_cex_markouts(&events, &period, &eth_usdt, &usdc_usdt) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("PropAMM CEX markouts failed: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    if let Err(error) = write_ndjson(&out, &rows) {
+        eprintln!("cannot write PropAMM CEX markouts: {error}");
+        return ExitCode::from(1);
+    }
+    let priced = rows.iter().filter(|row| row.markout_0s_bp.is_some()).count();
+    println!(
+        "wrote {} WETH/stablecoin CEX markout rows, {priced} priced at the fill, from {} ETH/USDT and {} USDC/USDT traded seconds",
+        rows.len(),
+        eth_usdt.len(),
+        usdc_usdt.len()
+    );
     ExitCode::SUCCESS
 }
 

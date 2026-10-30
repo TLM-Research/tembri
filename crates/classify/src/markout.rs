@@ -6,7 +6,8 @@
 
 use std::collections::BTreeMap;
 use tlm_model::{
-    PropammEvent, PropammEventKind, PropammMarkout, ReferenceBlockPrice, ReferencePricePoint,
+    PropammEvent, PropammEventKind, PropammFillTerms, PropammMarkout, ReferenceBlockPrice,
+    ReferencePricePoint,
 };
 
 use crate::reference_mid_before;
@@ -25,6 +26,57 @@ fn stable_name(token: &str) -> Option<&'static str> {
     }
 }
 
+/// A fill that trades WETH against USDC or USDT, signed from the taker's side.
+pub(crate) struct WethStableFill<'a> {
+    pub terms: &'a PropammFillTerms,
+    pub taker_side: &'static str,
+    /// +1 for a WETH buy, -1 for a sale.
+    pub sign: f64,
+    pub weth_amount: f64,
+    pub stable_amount: f64,
+    /// Stablecoin per WETH.
+    pub fill_price: f64,
+    pub stable: &'static str,
+}
+
+/// The WETH/stablecoin terms of a decoded fill. Other events and pairs return
+/// `None`; a zero amount is an error.
+pub(crate) fn weth_stable_fill(event: &PropammEvent) -> Result<Option<WethStableFill<'_>>, String> {
+    if event.kind != PropammEventKind::Fill {
+        return Ok(None);
+    }
+    let Some(terms) = &event.fill else {
+        return Ok(None);
+    };
+    let (taker_side, sign, weth_raw, stable_raw, stable) = if terms.token_out.eq_ignore_ascii_case(WETH) {
+        match stable_name(&terms.token_in) {
+            Some(stable) => ("buy_weth", 1.0, terms.amount_out, terms.amount_in, stable),
+            None => return Ok(None),
+        }
+    } else if terms.token_in.eq_ignore_ascii_case(WETH) {
+        match stable_name(&terms.token_out) {
+            Some(stable) => ("sell_weth", -1.0, terms.amount_in, terms.amount_out, stable),
+            None => return Ok(None),
+        }
+    } else {
+        return Ok(None);
+    };
+    if weth_raw == 0 || stable_raw == 0 {
+        return Err(format!("fill {} log {} has a zero amount", event.tx_hash, terms.log_index));
+    }
+    let weth_amount = weth_raw as f64 / 1e18;
+    let stable_amount = stable_raw as f64 / 1e6;
+    Ok(Some(WethStableFill {
+        terms,
+        taker_side,
+        sign,
+        weth_amount,
+        stable_amount,
+        fill_price: stable_amount / weth_amount,
+        stable,
+    }))
+}
+
 /// Markouts for every decoded fill that trades WETH against USDC or USDT.
 /// Other fills are out of scope and return no row. `points` must be sorted
 /// by block, position and log index; `closes` should cover 25 blocks past
@@ -37,33 +89,11 @@ pub fn propamm_markouts(
     let closes: BTreeMap<u64, &ReferenceBlockPrice> =
         closes.iter().map(|close| (close.block_number, close)).collect();
     let mut rows = Vec::new();
-    for event in events.iter().filter(|event| event.kind == PropammEventKind::Fill) {
-        let Some(terms) = &event.fill else {
+    for event in events {
+        let Some(fill) = weth_stable_fill(event)? else {
             continue;
         };
-        let (taker_side, sign, weth_raw, stable_raw, stable) =
-            if terms.token_out.eq_ignore_ascii_case(WETH) {
-                match stable_name(&terms.token_in) {
-                    Some(stable) => ("buy_weth", 1.0, terms.amount_out, terms.amount_in, stable),
-                    None => continue,
-                }
-            } else if terms.token_in.eq_ignore_ascii_case(WETH) {
-                match stable_name(&terms.token_out) {
-                    Some(stable) => ("sell_weth", -1.0, terms.amount_in, terms.amount_out, stable),
-                    None => continue,
-                }
-            } else {
-                continue;
-            };
-        if weth_raw == 0 || stable_raw == 0 {
-            return Err(format!(
-                "fill {} log {} has a zero amount",
-                event.tx_hash, terms.log_index
-            ));
-        }
-        let weth_amount = weth_raw as f64 / 1e18;
-        let stable_amount = stable_raw as f64 / 1e6;
-        let fill_price = stable_amount / weth_amount;
+        let WethStableFill { terms, taker_side, sign, weth_amount, stable_amount, fill_price, stable } = fill;
         let markout = |mid: f64| sign * (mid - fill_price) / fill_price * 1e4;
         let at_fill = reference_mid_before(points, event.block_number, event.tx_position);
         let horizon = |blocks: u64| {
@@ -104,7 +134,6 @@ pub fn propamm_markouts(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tlm_model::PropammFillTerms;
 
     fn fill(position: u32, token_in: &str, token_out: &str, amount_in: u128, amount_out: u128) -> PropammEvent {
         PropammEvent {

@@ -1,6 +1,7 @@
 //! Deterministic transaction labels. Protocol-specific signature lists belong in config.
 
 pub mod activity;
+pub mod cex_price;
 pub mod fee_fingerprint;
 pub mod lifecycle;
 pub mod markout;
@@ -12,6 +13,7 @@ pub use activity::{
 };
 pub use fee_fingerprint::{fingerprint_fee_fields, FeeFingerprint, FeeFingerprintConfig};
 pub use lifecycle::measure_mempool_lifecycle;
+pub use cex_price::{propamm_cex_markouts, CexSeries, CEX_HORIZONS_SECONDS, CEX_MAX_AGE_SECONDS};
 pub use markout::propamm_markouts;
 pub use reference_price::{
     decode_reference_swap, reference_block_closes, reference_mid_before, REFERENCE_POOL,

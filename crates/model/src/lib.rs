@@ -429,6 +429,39 @@ pub struct PropammMarkout {
     pub ref_block_25: Option<BlockNumber>,
 }
 
+/// A taker-signed markout of one WETH/stablecoin fill against a CEX trade
+/// price, at the fill block's timestamp and 12, 60 and 300 seconds later.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PropammCexMarkout {
+    pub block_number: BlockNumber,
+    /// Fill block timestamp in Unix seconds: the horizon-0 time.
+    pub block_timestamp: u64,
+    pub venue: String,
+    pub pool: String,
+    pub builder: Option<String>,
+    pub fill_tx_hash: String,
+    pub fill_tx_position: u32,
+    pub log_index: u32,
+    pub sender: String,
+    pub recipient: String,
+    /// `buy_weth` or `sell_weth`, from the taker's side.
+    pub taker_side: String,
+    /// `usdc` or `usdt`. A USDC fill is priced as ETH/USDT divided by USDC/USDT.
+    pub stable: String,
+    pub weth_amount: f64,
+    pub stable_amount: f64,
+    /// Stablecoin per WETH.
+    pub fill_price: f64,
+    /// CEX price in the fill's stablecoin at the block timestamp.
+    pub cex_mid_at_fill: Option<f64>,
+    /// Seconds from the last ETH/USDT trade to the block timestamp.
+    pub cex_age_at_fill_s: Option<u64>,
+    pub markout_0s_bp: Option<f64>,
+    pub markout_12s_bp: Option<f64>,
+    pub markout_60s_bp: Option<f64>,
+    pub markout_300s_bp: Option<f64>,
+}
+
 /// The reference price at the close of each period block. A block without a
 /// swap carries the latest earlier close; `last_swap_block` says how stale.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

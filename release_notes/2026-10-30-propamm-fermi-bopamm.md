@@ -23,6 +23,9 @@
   terms (sender, tokens, amounts, recipient); `tembri propamm-markouts`
   writes taker-signed markouts in bp at the fill and 1, 5 and 25 blocks later
   for WETH/USDC and WETH/USDT fills.
+- CEX markouts: `tembri propamm-cex-markouts` prices the same fills against
+  Binance one-second spot klines (ETH/USDT, with USDC fills converted through
+  USDC/USDT) at 0, 12, 60 and 300 s after the block timestamp.
 
 ## Changed
 
@@ -51,11 +54,15 @@
   routing selection: buyers and sellers both show positive horizon-0
   markouts. They are not yet evidence of adverse selection. See
   `adr/2026-10-30-propamm-markouts.md`.
+- Against Binance, takers pay a spread on both sides at the fill (mean
+  −0.39 bp buys, −0.92 bp sells). Mean markouts change little up to 60 s,
+  and no adverse selection is visible on 2026-10-05. The Binance price is the
+  last trade, not a quoted mid. See `adr/2026-10-30-propamm-cex-markouts.md`.
 
 ## Validation
 
 - On 2026-10-05: every Fermi (1,934), El Zorro (443) and bopAMM (225) fill
   pairs with an earlier same-block update. There are 225 bopAMM self-writes.
 - All 1,148 registry writes on 2026-10-05 carry their own block's timestamp.
-- `cargo test --workspace` (52 tests) and
+- `cargo test --workspace` (54 tests) and
   `cargo clippy --workspace -- -D warnings` pass.
