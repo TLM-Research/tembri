@@ -430,7 +430,9 @@ pub struct PropammMarkout {
 }
 
 /// A taker-signed markout of one WETH/stablecoin fill against a CEX trade
-/// price, at the fill block's timestamp and 12, 60 and 300 seconds later.
+/// price, 12, 4 and 2 seconds before the fill block's timestamp, at it, and
+/// 12, 60 and 300 seconds after it. The difference between horizon 0 and a
+/// negative horizon is the taker-signed price move just before the block.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct PropammCexMarkout {
     pub block_number: BlockNumber,
@@ -456,6 +458,9 @@ pub struct PropammCexMarkout {
     pub cex_mid_at_fill: Option<f64>,
     /// Seconds from the last ETH/USDT trade to the block timestamp.
     pub cex_age_at_fill_s: Option<u64>,
+    pub markout_minus_12s_bp: Option<f64>,
+    pub markout_minus_4s_bp: Option<f64>,
+    pub markout_minus_2s_bp: Option<f64>,
     pub markout_0s_bp: Option<f64>,
     pub markout_12s_bp: Option<f64>,
     pub markout_60s_bp: Option<f64>,

@@ -11,8 +11,9 @@ use crate::markout::{weth_stable_fill, WethStableFill};
 
 /// A price older than this many seconds is treated as missing.
 pub const CEX_MAX_AGE_SECONDS: u64 = 30;
-/// Markout horizons in seconds after the fill block's timestamp.
-pub const CEX_HORIZONS_SECONDS: [u64; 4] = [0, 12, 60, 300];
+/// Markout horizons in seconds relative to the fill block's timestamp. The
+/// negative ones show the price move just before the block.
+pub const CEX_HORIZONS_SECONDS: [i64; 7] = [-12, -4, -2, 0, 12, 60, 300];
 
 /// Last-trade prices by second, from one or more kline files.
 #[derive(Clone, Debug, Default)]
@@ -83,7 +84,8 @@ impl CexSeries {
     }
 }
 
-/// CEX markouts for every WETH/USDC and WETH/USDT fill. USDT fills use
+/// CEX markouts for every WETH/USDC and WETH/USDT fill, at every horizon in
+/// `CEX_HORIZONS_SECONDS`. USDT fills use
 /// ETH/USDT; USDC fills use ETH/USDT divided by USDC/USDT at the same time.
 /// A fill whose block has no timestamp in `period` is an error.
 pub fn propamm_cex_markouts(
@@ -112,7 +114,8 @@ pub fn propamm_cex_markouts(
         };
         let markout = |time: u64| mid(time).map(|(price, _)| sign * (price - fill_price) / fill_price * 1e4);
         let at_fill = mid(block_timestamp);
-        let [h0, h12, h60, h300] = CEX_HORIZONS_SECONDS.map(|seconds| markout(block_timestamp + seconds));
+        let [m12, m4, m2, h0, h12, h60, h300] =
+            CEX_HORIZONS_SECONDS.map(|seconds| block_timestamp.checked_add_signed(seconds).and_then(markout));
         rows.push(PropammCexMarkout {
             block_number: event.block_number,
             block_timestamp,
@@ -131,6 +134,9 @@ pub fn propamm_cex_markouts(
             fill_price,
             cex_mid_at_fill: at_fill.map(|(price, _)| price),
             cex_age_at_fill_s: at_fill.map(|(_, age)| age),
+            markout_minus_12s_bp: m12,
+            markout_minus_4s_bp: m4,
+            markout_minus_2s_bp: m2,
             markout_0s_bp: h0,
             markout_12s_bp: h12,
             markout_60s_bp: h60,
@@ -202,7 +208,8 @@ mod tests {
     fn converts_usdc_fills_through_usdc_usdt() {
         let mut eth = CexSeries::default();
         let mut usdc = CexSeries::default();
-        eth.add_binance_klines(&[kline(T - 1, 2_002.0, 1), kline(T + 11, 2_012.0, 1)].concat()).unwrap();
+        eth.add_binance_klines(&[kline(T - 5, 1_990.0, 1), kline(T - 1, 2_002.0, 1), kline(T + 11, 2_012.0, 1)].concat())
+            .unwrap();
         usdc.add_binance_klines(&kline(T - 1, 1.001, 1)).unwrap();
         let period = [PropammPeriodBlock { block_number: 10, builder: None, timestamp: Some(T) }];
         let events = [
@@ -217,6 +224,9 @@ mod tests {
             .map(|row| {
                 (
                     row.stable.as_str(),
+                    round(row.markout_minus_12s_bp),
+                    round(row.markout_minus_4s_bp),
+                    round(row.markout_minus_2s_bp),
                     round(row.cex_mid_at_fill),
                     round(row.markout_0s_bp),
                     round(row.markout_12s_bp),
@@ -224,12 +234,14 @@ mod tests {
                 )
             })
             .collect();
+        // Before the block, ETH/USDT last traded at 1,990 (second T - 5), but
+        // USDC/USDT has no trade before T - 1, so the USDC fill has no price.
         // At 60 s the last ETH/USDT trade is 48 s old, so the price is missing.
         assert_eq!(
             found,
             [
-                ("usdc", Some(2_000.0), Some(0.0), Some(49.9500), None),
-                ("usdt", Some(2_002.0), Some(-10.0), Some(-60.0), None),
+                ("usdc", None, None, None, Some(2_000.0), Some(0.0), Some(49.9500), None),
+                ("usdt", None, Some(50.0), Some(50.0), Some(2_002.0), Some(-10.0), Some(-60.0), None),
             ]
         );
         assert!(propamm_cex_markouts(&events, &[], &eth, &usdc).is_err());

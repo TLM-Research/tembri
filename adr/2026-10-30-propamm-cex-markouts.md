@@ -38,10 +38,11 @@ depend on on-chain routing. The chosen source is Binance spot, one-second.
 3. A USDT fill uses ETH/USDT. A USDC fill uses ETH/USDT divided by USDC/USDT
    at the same time. Both series come from the same exchange, and ETH/USDT
    trades far more than ETH/USDC.
-4. Horizons are 0, 12, 60 and 300 s after the fill block's timestamp, in
-   seconds rather than blocks, so missed slots do not stretch them. Horizon 0
-   is the block timestamp (the slot start). Each row records the age of the
-   ETH/USDT price at the fill.
+4. Horizons are 12, 4 and 2 s before the fill block's timestamp, at it, and
+   12, 60 and 300 s after it, in seconds rather than blocks, so missed slots
+   do not stretch them. Horizon 0 is the block timestamp (the slot start).
+   Each row records the age of the ETH/USDT price at the fill. Horizon 0
+   minus a negative horizon is the taker-signed price move before the block.
 
 ## Consequences
 
@@ -54,6 +55,21 @@ depend on on-chain routing. The chosen source is Binance spot, one-second.
   −0.67, −0.49 bp) and is +0.11 bp (naive SE 0.25) at 300 s. No adverse
   selection is visible in this day. The standard errors ignore time
   clustering and overlapping horizons, so they are lower bounds.
+- Takers trade against the move just before the block. The mean
+  taker-signed ETH/USDT move over the 12 s before the block is −1.69 bp
+  (naive SE 0.08; −1.65 for buys, −1.74 for sells). Of 1,353 fills with a
+  move above 0.5 bp, 81% traded against it: buying after a fall, selling
+  after a rise. Every venue and every sender with at least 40 fills shows
+  the same sign.
+- The Uniswap reference explains it. Binned by that move (below −4, −4 to
+  −1, −1 to 1, above 1 bp), the taker-signed gap of the Uniswap price over
+  Binance at the fill is 4.63, 2.98, 1.71 and −0.30 bp, while the Binance
+  markout stays between −0.82 and −0.45 bp. After a CEX move, the PropAMM
+  quote follows it in the same block and the Uniswap price lags, so routers
+  send the trade against the move to the PropAMM. This is the routing
+  selection suspected in the on-chain ADR. It is evidence that PropAMMs win
+  flow by quoting fresher than the AMM, not that takers pick off stale
+  PropAMM quotes.
 - The time at which a fill was priced, relative to the block timestamp, is
   unknown. On 2026-10-05 the standard deviation of ETH/USDT returns was
   0.58 bp over 1 s, 1.21 bp over 4 s and 2.18 bp over 12 s, growing with the

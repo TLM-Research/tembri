@@ -25,7 +25,8 @@
   for WETH/USDC and WETH/USDT fills.
 - CEX markouts: `tembri propamm-cex-markouts` prices the same fills against
   Binance one-second spot klines (ETH/USDT, with USDC fills converted through
-  USDC/USDT) at 0, 12, 60 and 300 s after the block timestamp.
+  USDC/USDT) 12, 4 and 2 s before the block timestamp, at it, and 12, 60
+  and 300 s after it.
 
 ## Changed
 
@@ -56,7 +57,10 @@
   `adr/2026-10-30-propamm-markouts.md`.
 - Against Binance, takers pay a spread on both sides at the fill (mean
   −0.39 bp buys, −0.92 bp sells). Mean markouts change little up to 60 s,
-  and no adverse selection is visible on 2026-10-05. The Binance price is the
+  and no adverse selection is visible on 2026-10-05. Takers trade against
+  the CEX move of the 12 s before the block (81% of fills with a move above
+  0.5 bp), when the lagging Uniswap price makes the PropAMM the better
+  route. The Binance price is the
   last trade, not a quoted mid. See `adr/2026-10-30-propamm-cex-markouts.md`.
 
 ## Validation
