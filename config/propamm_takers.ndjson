@@ -1,0 +1,13 @@
+{"address": "0x9008d19f58aabd9ed0d60971565aa8510560ab41", "class": "intent_settlement", "name": "CoW Protocol GPv2Settlement", "evidence": "Sourcify exact match: GPv2Settlement"}
+{"address": "0x4ddf368080cd7946db5b459ad591c350158175e1", "class": "aggregator", "name": "PropAMM reference router (Lambda Class)", "evidence": "config/labels.toml reference_router (Lambda Class deployment table); Sourcify match: ERC1967Proxy"}
+{"address": "0xa4bc389e87011fed8e902166bf421a29fa6ef633", "class": "aggregator", "name": "TychoFallbackRouter", "evidence": "Sourcify exact match: TychoFallbackRouter"}
+{"address": "0x6131b5fae19ea4f9d964eac0408e4408b66337b5", "class": "aggregator", "name": "KyberSwap MetaAggregationRouterV2", "evidence": "Sourcify match: MetaAggregationRouterV2"}
+{"address": "0x8feab81d36e7576107d5de0758c1b839be31b4f6", "class": "aggregator", "name": "DexRouter", "evidence": "Sourcify match: DexRouter"}
+{"address": "0xccc88a9d1b4ed6b0eaba998850414b24f1c315be", "class": "aggregator", "name": "Relay RelayApprovalProxyV3", "evidence": "Sourcify match: RelayApprovalProxyV3; user-signed swaps"}
+{"address": "0xb92fe925dc43a0ecde6c8b1a2709c170ec4fff4f", "class": "aggregator", "name": "Relay RelayRouterV3", "evidence": "Sourcify match: RelayRouterV3"}
+{"address": "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae", "class": "aggregator", "name": "LI.FI LiFiDiamond", "evidence": "Sourcify exact match: LiFiDiamond"}
+{"address": "0x69460570c93f9de5e2edbc3052bf10125f0ca22d", "class": "aggregator", "name": "Rango RangoDiamond", "evidence": "Sourcify exact match: RangoDiamond"}
+{"address": "0x50c4e75a512f2a14a7b304787adf79c4531a5909", "class": "aggregator", "name": "0x AllowanceHolder", "evidence": "Sourcify match: AllowanceHolder"}
+{"address": "0x0000000071727de22e5e9d8baf0edac6f37da032", "class": "account_abstraction", "name": "ERC-4337 EntryPoint v0.7", "evidence": "Sourcify exact match: EntryPoint"}
+{"address": "0x4337084d9e255ff0702461cf8895ce9e3b5ff108", "class": "account_abstraction", "name": "ERC-4337 EntryPoint v0.8", "evidence": "Sourcify exact match: EntryPoint"}
+{"address": "0xca11bde05977b3631167028862be2a173976ca11", "class": "batch_utility", "name": "Multicall3", "evidence": "Sourcify exact match: Multicall3"}

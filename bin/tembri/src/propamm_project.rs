@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use tlm_classify::{decode_reference_swap, REFERENCE_POOL};
-use tlm_model::{PropammCall, PropammLog, PropammPeriodBlock, ReferencePricePoint};
+use tlm_model::{PropammCall, PropammLog, PropammPeriodBlock, PropammTxEnvelope, ReferencePricePoint};
 
 #[derive(Clone, Debug)]
 pub(crate) struct XatuBlockHeader {
@@ -33,7 +33,10 @@ pub(crate) struct XatuTxRow {
     pub block_number: u64,
     pub index: u32,
     pub hash: String,
+    pub from: Option<String>,
     pub to: Option<String>,
+    /// `None` for transactions without the field (legacy type).
+    pub max_priority_fee_per_gas: Option<u64>,
     /// Retained only for calls to the registry; other calldata is not needed.
     pub input: Option<String>,
     pub gas_used: u64,
@@ -274,13 +277,15 @@ fn is_registry_call(tx: &XatuTxRow, registry: &str) -> bool {
     tx.success && to_registry(tx.to.as_deref(), registry)
 }
 
-/// Decoder inputs, every period block's builder signal, and the reference
-/// pool's price points (empty unless requested).
+/// Decoder inputs, every period block's builder signal, the reference
+/// pool's price points (empty unless requested), and the envelope of every
+/// transaction with a reviewed PropAMM log.
 pub(crate) type ProjectedPlan = (
     Vec<PropammLog>,
     Vec<PropammCall>,
     Vec<PropammPeriodBlock>,
     Vec<ReferencePricePoint>,
+    Vec<PropammTxEnvelope>,
 );
 
 /// Read and project every partition in the plan, restricted to its blocks.
@@ -299,6 +304,7 @@ pub(crate) fn project_xatu_plan(
     let mut all_logs = Vec::new();
     let mut all_calls = Vec::new();
     let mut period_blocks = Vec::new();
+    let mut envelopes = Vec::new();
     for blocks_path in xatu_plan_files(plan, "blocks")? {
         let partition = blocks_path
             .parent()
@@ -329,6 +335,21 @@ pub(crate) fn project_xatu_plan(
                 reference.extend(point);
             }
         }
+        let log_txs: BTreeSet<&str> = logs
+            .iter()
+            .filter(|log| emitters.contains(&log.address.to_ascii_lowercase()))
+            .map(|log| log.tx_hash.as_str())
+            .collect();
+        for tx in txs.iter().filter(|tx| log_txs.contains(tx.hash.as_str())) {
+            envelopes.push(PropammTxEnvelope {
+                block_number: tx.block_number,
+                tx_hash: tx.hash.clone(),
+                tx_position: tx.index,
+                from: tx.from.clone().ok_or_else(|| format!("transaction {} has no sender", tx.hash))?,
+                to: tx.to.clone(),
+                max_priority_fee_per_gas: tx.max_priority_fee_per_gas,
+            });
+        }
         let traces = if with_traces {
             Some(read_traces(&partition.join("traces.parquet"), registry, &selected)?)
         } else {
@@ -347,7 +368,8 @@ pub(crate) fn project_xatu_plan(
     });
     period_blocks.sort_by_key(|block| block.block_number);
     reference.sort_by_key(|point| (point.block_number, point.tx_position, point.log_index));
-    Ok((all_logs, all_calls, period_blocks, reference))
+    envelopes.sort_by_key(|tx| (tx.block_number, tx.tx_position));
+    Ok((all_logs, all_calls, period_blocks, reference, envelopes))
 }
 
 /// Resolve Xatu columns by name: physical positions differ between schema
@@ -407,13 +429,23 @@ fn read_txs(
     selected: &impl Fn(u64) -> bool,
 ) -> Result<Vec<XatuTxRow>, String> {
     let reader = xatu_reader(path)?;
-    let [number, index, hash, to, input, gas_used, success] = columns(
+    let [number, index, hash, from, to, priority_fee, input, gas_used, success] = columns(
         &reader,
         path,
-        &["block_number", "transaction_index", "transaction_hash", "to_address", "input", "gas_used", "success"],
+        &[
+            "block_number",
+            "transaction_index",
+            "transaction_hash",
+            "from_address",
+            "to_address",
+            "max_priority_fee_per_gas",
+            "input",
+            "gas_used",
+            "success",
+        ],
     )?[..]
     else {
-        unreachable!("seven columns requested")
+        unreachable!("nine columns requested")
     };
     let mut txs = Vec::new();
     for row in reader.get_row_iter(None).map_err(|e| e.to_string())? {
@@ -428,6 +460,8 @@ fn read_txs(
             block_number,
             index: u32::try_from(parquet_u64(&row, index)?).map_err(|e| e.to_string())?,
             hash: parquet_text(&row, hash).ok_or("transaction without hash")?,
+            from: parquet_text(&row, from),
+            max_priority_fee_per_gas: parquet_u64(&row, priority_fee).ok(),
             input: if is_registry { parquet_text(&row, input) } else { None },
             to,
             gas_used: parquet_u64(&row, gas_used)?,
@@ -570,7 +604,9 @@ mod tests {
             block_number,
             index,
             hash: format!("0x{block_number}{index}"),
+            from: None,
             to: Some(to.into()),
+            max_priority_fee_per_gas: None,
             input: Some("0xa9114b0f".into()),
             gas_used,
             success,

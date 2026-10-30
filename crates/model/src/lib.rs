@@ -467,6 +467,67 @@ pub struct PropammCexMarkout {
     pub markout_300s_bp: Option<f64>,
 }
 
+/// The envelope of a transaction that emitted a reviewed PropAMM log.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropammTxEnvelope {
+    pub block_number: BlockNumber,
+    pub tx_hash: String,
+    pub tx_position: u32,
+    /// Signer.
+    pub from: String,
+    /// `None` for a contract creation.
+    pub to: Option<String>,
+    pub max_priority_fee_per_gas: Option<u64>,
+}
+
+/// A reviewed address that identifies a taker's order-flow channel.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropammTakerLabel {
+    pub address: String,
+    /// `intent_settlement`, `aggregator`, `account_abstraction` or
+    /// `batch_utility`.
+    pub class: String,
+    pub name: String,
+    pub evidence: String,
+}
+
+/// The taker class of one decoded fill.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropammTakerFill {
+    pub block_number: BlockNumber,
+    pub venue: String,
+    pub fill_tx_hash: String,
+    pub log_index: u32,
+    /// The pool's immediate caller (`Swapped.sender`).
+    pub sender: String,
+    pub tx_from: String,
+    pub tx_to: Option<String>,
+    pub class: String,
+    /// The reviewed label that set the class, if any.
+    pub label_name: Option<String>,
+}
+
+/// Mean CEX markouts of one taker class. Standard errors treat fills as
+/// independent, so they are lower bounds.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PropammTakerClassSummary {
+    pub class: String,
+    pub fills: u32,
+    pub senders: u32,
+    pub signers: u32,
+    /// Taker-signed CEX move over the 12 s before the block (bp).
+    pub pre_12s_move_bp: Option<f64>,
+    /// Share of fills with a 12 s move above 0.5 bp that traded against it.
+    pub against_move_share: Option<f64>,
+    pub markout_0s_bp: Option<f64>,
+    pub markout_0s_se: Option<f64>,
+    pub markout_12s_bp: Option<f64>,
+    pub markout_60s_bp: Option<f64>,
+    pub markout_60s_se: Option<f64>,
+    pub markout_300s_bp: Option<f64>,
+    pub markout_300s_se: Option<f64>,
+}
+
 /// The reference price at the close of each period block. A block without a
 /// swap carries the latest earlier close; `last_swap_block` says how stale.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

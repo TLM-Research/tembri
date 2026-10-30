@@ -27,6 +27,10 @@
   Binance one-second spot klines (ETH/USDT, with USDC fills converted through
   USDC/USDT) 12, 4 and 2 s before the block timestamp, at it, and 12, 60
   and 300 s after it.
+- Taker classes (TODO item 11): `propamm-project --txs-out` writes
+  transaction envelopes for PropAMM transactions; `tembri propamm-takers`
+  classes fills from transaction structure and the reviewed table
+  `config/propamm_takers.ndjson`, and summarises CEX markouts by class.
 
 ## Changed
 
@@ -68,5 +72,5 @@
 - On 2026-10-05: every Fermi (1,934), El Zorro (443) and bopAMM (225) fill
   pairs with an earlier same-block update. There are 225 bopAMM self-writes.
 - All 1,148 registry writes on 2026-10-05 carry their own block's timestamp.
-- `cargo test --workspace` (54 tests) and
+- `cargo test --workspace` (56 tests) and
   `cargo clippy --workspace -- -D warnings` pass.

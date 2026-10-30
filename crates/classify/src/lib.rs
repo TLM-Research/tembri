@@ -7,6 +7,7 @@ pub mod lifecycle;
 pub mod markout;
 pub mod propamm;
 pub mod reference_price;
+pub mod taker;
 pub use activity::{
     ActivityFilter, ClassifiedActivity, CompositionCounts, MempoolVisibility, PublicMempoolIndex,
     TipBucket,
@@ -15,6 +16,7 @@ pub use fee_fingerprint::{fingerprint_fee_fields, FeeFingerprint, FeeFingerprint
 pub use lifecycle::measure_mempool_lifecycle;
 pub use cex_price::{propamm_cex_markouts, CexSeries, CEX_HORIZONS_SECONDS, CEX_MAX_AGE_SECONDS};
 pub use markout::propamm_markouts;
+pub use taker::{classify_propamm_takers, summarize_taker_markouts, TAKER_CLASS_RANK};
 pub use reference_price::{
     decode_reference_swap, reference_block_closes, reference_mid_before, REFERENCE_POOL,
     UNISWAP_V3_SWAP_TOPIC,

@@ -29,11 +29,12 @@ fn main() -> ExitCode {
         Some("propamm-pair") => propamm_pair(a.collect()),
         Some("propamm-markouts") => propamm_markouts(a.collect()),
         Some("propamm-cex-markouts") => propamm_cex_markouts(a.collect()),
+        Some("propamm-takers") => propamm_takers(a.collect()),
         Some("mempool-lifecycle") => mempool_lifecycle(a.collect()),
         Some("run-period") => run_period(a.collect()),
         Some("report") => report(a.collect()),
         _ => {
-            println!("Usage: tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|propamm-bytecode-group|propamm-project|propamm-decode|propamm-pair|propamm-markouts|propamm-cex-markouts|mempool-lifecycle|run-period|report> ...");
+            println!("Usage: tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|propamm-bytecode-group|propamm-project|propamm-decode|propamm-pair|propamm-markouts|propamm-cex-markouts|propamm-takers|mempool-lifecycle|run-period|report> ...");
             ExitCode::from(2)
         }
     }
@@ -410,7 +411,7 @@ fn propamm_project_cmd(v: Vec<String>) -> ExitCode {
         arg(&v, "--calls-out"),
     ) else {
         eprintln!(
-            "Usage: tembri propamm-project --xatu DIR [--period available|YYYY-MM|YYYY-MM-DD] --fill-rules RULES.ndjson --registry ADDRESS [--with-traces] --logs-out LOGS.ndjson --calls-out CALLS.ndjson [--period-blocks-out BLOCKS.ndjson] [--reference-out PRICES.ndjson] [--reference-blocks-out CLOSES.ndjson]"
+            "Usage: tembri propamm-project --xatu DIR [--period available|YYYY-MM|YYYY-MM-DD] --fill-rules RULES.ndjson --registry ADDRESS [--with-traces] --logs-out LOGS.ndjson --calls-out CALLS.ndjson [--period-blocks-out BLOCKS.ndjson] [--txs-out TXS.ndjson] [--reference-out PRICES.ndjson] [--reference-blocks-out CLOSES.ndjson]"
         );
         return ExitCode::from(2);
     };
@@ -449,7 +450,7 @@ fn propamm_project_cmd(v: Vec<String>) -> ExitCode {
     let reference_out = arg(&v, "--reference-out");
     let reference_blocks_out = arg(&v, "--reference-blocks-out");
     let with_reference = reference_out.is_some() || reference_blocks_out.is_some();
-    let (logs, calls, period_blocks, reference) = match propamm_project::project_xatu_plan(
+    let (logs, calls, period_blocks, reference, envelopes) = match propamm_project::project_xatu_plan(
         &plan,
         &registry,
         &emitters,
@@ -469,6 +470,12 @@ fn propamm_project_cmd(v: Vec<String>) -> ExitCode {
     if let Err(error) = write_ndjson(&calls_out, &calls) {
         eprintln!("cannot write PropAMM calls: {error}");
         return ExitCode::from(1);
+    }
+    if let Some(path) = arg(&v, "--txs-out") {
+        if let Err(error) = write_ndjson(&path, &envelopes) {
+            eprintln!("cannot write PropAMM transaction envelopes: {error}");
+            return ExitCode::from(1);
+        }
     }
     if let Some(path) = arg(&v, "--period-blocks-out") {
         if let Err(error) = write_ndjson(&path, &period_blocks) {
@@ -679,6 +686,76 @@ fn propamm_cex_markouts(v: Vec<String>) -> ExitCode {
         eth_usdt.len(),
         usdc_usdt.len()
     );
+    ExitCode::SUCCESS
+}
+
+fn propamm_takers(v: Vec<String>) -> ExitCode {
+    let (Some(events_path), Some(txs_path), Some(labels_path), Some(out)) = (
+        arg(&v, "--events"),
+        arg(&v, "--txs"),
+        arg(&v, "--takers"),
+        arg(&v, "--out"),
+    ) else {
+        eprintln!(
+            "Usage: tembri propamm-takers --events EVENTS.ndjson --txs TXS.ndjson --takers TAKERS.ndjson --out TAKER_FILLS.ndjson [--cex-markouts MARKOUTS.ndjson --summary-out CLASSES.ndjson]"
+        );
+        return ExitCode::from(2);
+    };
+    let events = match read_ndjson::<tlm_model::PropammEvent>(&events_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid PropAMM event input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let txs = match read_ndjson::<tlm_model::PropammTxEnvelope>(&txs_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid PropAMM transaction input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let labels = match read_ndjson::<tlm_model::PropammTakerLabel>(&labels_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid taker label input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let takers = match tlm_classify::classify_propamm_takers(&events, &txs, &labels) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("PropAMM taker classification failed: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    if let Err(error) = write_ndjson(&out, &takers) {
+        eprintln!("cannot write PropAMM taker fills: {error}");
+        return ExitCode::from(1);
+    }
+    println!("wrote {} PropAMM taker fill rows", takers.len());
+    match (arg(&v, "--cex-markouts"), arg(&v, "--summary-out")) {
+        (Some(markouts_path), Some(summary_out)) => {
+            let markouts = match read_ndjson::<tlm_model::PropammCexMarkout>(&markouts_path) {
+                Ok(rows) => rows,
+                Err(error) => {
+                    eprintln!("invalid PropAMM CEX markout input: {error}");
+                    return ExitCode::from(2);
+                }
+            };
+            let summary = tlm_classify::summarize_taker_markouts(&takers, &markouts);
+            if let Err(error) = write_ndjson(&summary_out, &summary) {
+                eprintln!("cannot write PropAMM taker summary: {error}");
+                return ExitCode::from(1);
+            }
+            println!("wrote {} taker class rows", summary.len());
+        }
+        (None, None) => {}
+        _ => {
+            eprintln!("--cex-markouts and --summary-out go together");
+            return ExitCode::from(2);
+        }
+    }
     ExitCode::SUCCESS
 }
 
