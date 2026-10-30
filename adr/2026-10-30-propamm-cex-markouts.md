@@ -70,6 +70,15 @@ depend on on-chain routing. The chosen source is Binance spot, one-second.
   selection suspected in the on-chain ADR. It is evidence that PropAMMs win
   flow by quoting fresher than the AMM, not that takers pick off stale
   PropAMM quotes.
+- 2026-10-03 to 2026-10-09 (12,359 fills, decoded from logs only; Xatu
+  traces cover only 4–5 October, and fills do not need them): the mean
+  horizon-0 markout is −0.75 bp (SE of the seven daily means 0.06). It is
+  negative on every day (−0.60 to −1.03) and at every venue. The 12, 60 and
+  300 s means are −0.83, −0.70 and −0.52 bp (SEs 0.09, 0.12, 0.37), so no
+  adverse selection is visible over a week in which ETH fell about 7%.
+  Takers trade against the 12 s pre-block move in 70–81% of fills each day.
+  Binned as above, the Uniswap gap is 4.32, 3.46, 2.21 and 0.56 bp, while
+  the Binance markout stays between −0.78 and −0.72 bp.
 - The time at which a fill was priced, relative to the block timestamp, is
   unknown. On 2026-10-05 the standard deviation of ETH/USDT returns was
   0.58 bp over 1 s, 1.21 bp over 4 s and 2.18 bp over 12 s, growing with the
