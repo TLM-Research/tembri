@@ -20,6 +20,25 @@ propamm_el_zorro_fill = "0x1eeaa4acf3c225a4033105c2647625dbb298dec93b14e16253c42
 # as `BopAmm` (exact match). Swapped fires once per swap; MakerFill fires once
 # per maker leg and is not used. Reviewed 2026-10-30.
 propamm_bopamm_fill = "0x1eeaa4acf3c225a4033105c2647625dbb298dec93b14e16253c4231e26c02b1d"
+# Six more emitters of the same Swapped event, reviewed 2026-10-30. In a
+# sample of every sixth Xatu chunk from 25943000 to 26159999, amountIn
+# matched a tokenIn transfer to the emitter and amountOut a tokenOut transfer
+# to recipient in every log (legacy bopAMM: as for bopAMM, some outputs are
+# paid in several maker legs). Identity per emitter:
+# - Kipseli 0x71e790dd…, legacy BopAmm 0xb09aaa56…, GoliathAMM 0x4367985a…:
+#   Sourcify exact match, ABI declares this Swapped.
+# - Metric 0xe715dc29…: Sourcify match `MetricRouterAdapter`, same ABI.
+# - Tempest 0x00000003…: ERC1967Proxy with an unverified implementation;
+#   accepted on the BuilderNet and Lambda Class listings plus the transfers.
+# - Park 0x77047af6…: Sourcify `ParkERC1967Proxy`, implementation
+#   0x73349f20… unverified; accepted on the proxy name plus the transfers.
+# 0x3ce2672a… also emits it and is a registry target, but has no identity.
+propamm_tempest_fill = "0x1eeaa4acf3c225a4033105c2647625dbb298dec93b14e16253c4231e26c02b1d"
+propamm_metric_fill = "0x1eeaa4acf3c225a4033105c2647625dbb298dec93b14e16253c4231e26c02b1d"
+propamm_kipseli_fill = "0x1eeaa4acf3c225a4033105c2647625dbb298dec93b14e16253c4231e26c02b1d"
+propamm_bopamm_legacy_fill = "0x1eeaa4acf3c225a4033105c2647625dbb298dec93b14e16253c4231e26c02b1d"
+propamm_goliath_fill = "0x1eeaa4acf3c225a4033105c2647625dbb298dec93b14e16253c4231e26c02b1d"
+propamm_park_fill = "0x1eeaa4acf3c225a4033105c2647625dbb298dec93b14e16253c4231e26c02b1d"
 # FermiSwap's pricing engine 0x0109aa91… emits only this topic, once in each
 # update transaction (selector 0xacee8aab) and in no other transaction on
 # 2026-10-03..09. The engine is unverified; the update rule rests on
@@ -67,8 +86,13 @@ tempest_entrypoint = "0x00000003f1ec2379e79f58e12ec6c4f51ee92149"
 # traces it reads its prices from registry target 0xb09999a4….
 bopamm_entrypoint = "0xb09aaa8933626d7e4c48d65dad2d77021cfbca9a"
 # Earlier BopAmm deployment (same verified source). It reads a different
-# contract, 0xb0999914…, and emitted no logs on 2026-10-03..09.
+# contract, 0xb0999914…, and emitted no logs on 2026-10-03..09, but filled
+# in September.
 bopamm_legacy_entrypoint = "0xb09aaa5614916d7aeb59c295c52c92ca82addd76"
+# Sourcify exact match `GoliathAMM`; first Swapped in the 26131000 chunk.
+goliath_entrypoint = "0x4367985a63063fc970b009c6e599e9225181f551"
+# Sourcify match `ParkERC1967Proxy` (implementation unverified).
+park_entrypoint = "0x77047af6cd8f7f84d96a020a2833d24916b75fde"
 # El Zorro: BuilderNet "stream address (pool and router)" and Lambda Class
 # deployed-contract table, both checked 2026-10-29.
 el_zorro_entrypoint = "0xcf211b4dd0d2be5c173ea57bcf938fc61d1d3bd3"

@@ -31,6 +31,10 @@
   transaction envelopes for PropAMM transactions; `tembri propamm-takers`
   classes fills from transaction structure and the reviewed table
   `config/propamm_takers.ndjson`, and summarises CEX markouts by class.
+- Fill rules for six more `Swapped` emitters: Tempest, Metric, Kipseli,
+  Goliath, Park and the legacy bopAMM, each checked against token transfers.
+  See `adr/2026-10-30-propamm-more-venues-and-month.md`, which also records
+  30 days of CEX markouts across all nine venues.
 
 ## Changed
 
@@ -64,7 +68,8 @@
   and no adverse selection is visible on 2026-10-05. Takers trade against
   the CEX move of the 12 s before the block (81% of fills with a move above
   0.5 bp), when the lagging Uniswap price makes the PropAMM the better
-  route. The Binance price is the
+  route. Over 30 days and nine venues, the horizon-0 mean is −0.45 bp
+  and negative on every day. The Binance price is the
   last trade, not a quoted mid. See `adr/2026-10-30-propamm-cex-markouts.md`.
 
 ## Validation
