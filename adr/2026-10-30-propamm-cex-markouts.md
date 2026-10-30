@@ -54,9 +54,13 @@ depend on on-chain routing. The chosen source is Binance spot, one-second.
   −0.67, −0.49 bp) and is +0.11 bp (naive SE 0.25) at 300 s. No adverse
   selection is visible in this day. The standard errors ignore time
   clustering and overlapping horizons, so they are lower bounds.
-- The fill's execution time within the slot is unknown. With ETH's
-  one-second volatility near 1 bp, timing alone adds about 1 bp of noise per
-  fill at horizon 0.
+- The time at which a fill was priced, relative to the block timestamp, is
+  unknown. On 2026-10-05 the standard deviation of ETH/USDT returns was
+  0.58 bp over 1 s, 1.21 bp over 4 s and 2.18 bp over 12 s, growing with the
+  square root of time. An offset of a few seconds adds about 1 bp of noise
+  per fill at horizon 0; a full slot would add about 2 bp. Noise that is
+  unrelated to the taker's side widens the spread of markouts but does not
+  bias their mean.
 - The price is the last trade, not a quoted mid. The ETH/USDT tick of 0.01
   is about 0.04 bp at 2,700 USDT, so the bid/ask bounce is negligible here.
   It would not be for thin pairs.
