@@ -46,6 +46,7 @@ pub(crate) struct XatuTraceRow {
     pub tx_hash: String,
     /// Path from the top-level frame; empty for the top-level frame itself.
     pub trace_address: Vec<u32>,
+    pub from: Option<String>,
     pub to: Option<String>,
     pub call_type: String,
     pub input: Option<String>,
@@ -135,6 +136,7 @@ pub(crate) fn project_propamm_rows(
             input: tx.input.clone().unwrap_or_else(|| "0x".into()),
             builder: headers[&tx.block_number].builder.clone(),
             trace_address: None,
+            from: None,
         });
     }
     for frame in internal {
@@ -168,6 +170,7 @@ pub(crate) fn project_propamm_rows(
                     .collect::<Vec<_>>()
                     .join("_"),
             ),
+            from: frame.from.clone(),
         });
     }
 
@@ -399,13 +402,14 @@ fn read_traces(
         return Err(format!("{} is missing; fetch the traces dataset", path.display()));
     }
     let reader = xatu_reader(path)?;
-    let [number, tx_index, tx_hash, to, input, call_type, trace_address, error] = columns(
+    let [number, tx_index, tx_hash, from, to, input, call_type, trace_address, error] = columns(
         &reader,
         path,
         &[
             "block_number",
             "transaction_index",
             "transaction_hash",
+            "action_from",
             "action_to",
             "action_input",
             "action_call_type",
@@ -414,7 +418,7 @@ fn read_traces(
         ],
     )?[..]
     else {
-        unreachable!("eight columns requested")
+        unreachable!("nine columns requested")
     };
     let mut frames = Vec::new();
     for row in reader.get_row_iter(None).map_err(|e| e.to_string())? {
@@ -434,6 +438,7 @@ fn read_traces(
             tx_index: u32::try_from(parquet_u64(&row, tx_index)?).map_err(|e| e.to_string())?,
             tx_hash: parquet_text(&row, tx_hash).ok_or("trace without transaction hash")?,
             trace_address: parse_trace_address(parquet_text(&row, trace_address).as_deref())?,
+            from: parquet_text(&row, from).map(|caller| caller.to_ascii_lowercase()),
             to: target,
             call_type: parquet_text(&row, call_type).unwrap_or_default(),
             input: if is_registry { parquet_text(&row, input) } else { None },
@@ -563,6 +568,7 @@ mod tests {
             tx_index: index,
             tx_hash: format!("0x10{index}"),
             trace_address: path.to_vec(),
+            from: Some("0xcaller".into()),
             to: Some(to.into()),
             call_type: call_type.into(),
             input: Some("0xa9114b0f".into()),

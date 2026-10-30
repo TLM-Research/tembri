@@ -105,7 +105,7 @@ pub fn decode_registry_batch_updates(
             tx_position: call.tx_position,
             cumulative_gas_before: call.cumulative_gas_before,
             update_timestamp: Some(timestamp.into()),
-            kind: PropammEventKind::Update,
+            kind: registry_write_kind(call, label),
         });
     }
     Ok(events)
@@ -156,8 +156,24 @@ pub fn decode_registry_direct_update(
         tx_position: call.tx_position,
         cumulative_gas_before: call.cumulative_gas_before,
         update_timestamp: Some(timestamp.into()),
-        kind: PropammEventKind::Update,
+        kind: registry_write_kind(call, label),
     }])
+}
+
+/// An internal registry write whose immediate caller is the reviewed target
+/// itself is the venue writing its own state (bopAMM does this inside every
+/// fill), not a maker quote update. Identified from the exact call tree only.
+fn registry_write_kind(call: &PropammCall, label: &PropammRegistryTarget) -> PropammEventKind {
+    let self_write = call.trace_address.is_some()
+        && call
+            .from
+            .as_deref()
+            .is_some_and(|caller| caller.eq_ignore_ascii_case(&label.target));
+    if self_write {
+        PropammEventKind::TargetWrite
+    } else {
+        PropammEventKind::Update
+    }
 }
 
 /// Decode all reviewed PropAMM evidence from one execution-data slice.
@@ -322,6 +338,7 @@ pub fn pair_propamm_events(events: &[PropammEvent]) -> Vec<PropammFillPair> {
             }
             match event.kind {
                 PropammEventKind::Update => in_tx = Some(event),
+                PropammEventKind::TargetWrite => {}
                 PropammEventKind::Fill => {
                     fills_since_update = fills_since_update.saturating_add(1);
                     let (update_tx_hash, update_tx_position, transaction_gap, gas_gap) =
@@ -388,10 +405,14 @@ pub fn summarize_propamm_blocks(
             fills: 0,
             paired_fills: 0,
             fills_without_update: 0,
+            target_writes: 0,
         });
         match event.kind {
             PropammEventKind::Update => row.updates = row.updates.saturating_add(1),
             PropammEventKind::Fill => row.fills = row.fills.saturating_add(1),
+            PropammEventKind::TargetWrite => {
+                row.target_writes = row.target_writes.saturating_add(1)
+            }
         }
     }
     for pair in pairs {
@@ -560,6 +581,7 @@ mod tests {
             input,
             builder: Some("titan".into()),
             trace_address: None,
+            from: None,
         };
         let targets = [PropammRegistryTarget {
             target: "0x00000000000000000000000000000000000000aa".into(),
@@ -593,6 +615,7 @@ mod tests {
             ),
             builder: Some("titan".into()),
             trace_address: None,
+            from: None,
         };
         let targets = [PropammRegistryTarget {
             target: "0x00000000000000000000000000000000000000aa".into(),
@@ -616,6 +639,7 @@ mod tests {
             input: "0x12345678".into(),
             builder: None,
             trace_address: None,
+            from: None,
         };
         assert!(decode_registry_batch_updates(&call, "0xregistry", &[])
             .unwrap()
@@ -639,6 +663,7 @@ mod tests {
             input: "0xa9114b0f00000000000000000000000000000003f1ec2379e79f58e12ec6c4f51ee921492b2f5776e38002e0c013d0d89828fdb06fee595ea2d5ed4b194e3883e823e350000000000000000000000000000000000000000000000000000000006ae255b3000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000020000000000000000d00cf6847000870cf1df6000480cad41c000008da701af820000018b0df5caf001510dacf130011e0d5625a000fe0d2991b800e60d1f0750".into(),
             builder: Some("buildernet".into()),
             trace_address: None,
+            from: None,
         }];
         let logs = [PropammLog {
             block_number: 26_293_512,
@@ -682,15 +707,18 @@ mod tests {
     }
 
     #[test]
-    fn golden_block_26122500_pairs_el_zorro_fills_and_keeps_fermi_unmatched() {
+    fn golden_block_26122500_pairs_el_zorro_and_fermi_fills_on_their_own_updates() {
         // Collected from Xatu canonical execution data for mainnet block
         // 26122500 (2026-10-05, Titan). A direct registry update for El Zorro
         // at transaction 151 precedes El Zorro fills at 152 and 220. The Fermi
-        // fill at 163 emits the same Swapped topic but reads a different
-        // pricing engine, so it must stay unmatched.
+        // fill at 163 emits the same Swapped topic but reads Fermi's own
+        // pricing engine, so it pairs with the engine update at 161 and never
+        // with the registry update at 151.
         const ZORRO: &str = "0xcf211b4dd0d2be5c173ea57bcf938fc61d1d3bd3";
         const FERMI: &str = "0x5979458912f80b96d30d4220af8e2e4925a33320";
+        const ENGINE: &str = "0x0109aa912b58508886a2a707204b0f8c8b164ccc";
         const SWAPPED: &str = "0x1eeaa4acf3c225a4033105c2647625dbb298dec93b14e16253c4231e26c02b1d";
+        const ENGINE_UPDATE: &str = "0x9c0210b76059007a29793536185cabba646316ffba304182459b5e2b7c00b48b";
         let builder = Some("titan (titanbuilder.xyz)".to_string());
         let calls = [PropammCall {
             block_number: 26_122_500,
@@ -701,6 +729,7 @@ mod tests {
             input: "0xa9114b0f000000000000000000000000cf211b4dd0d2be5c173ea57bcf938fc61d1d3bd385053f65cd1ece2bb37b70c13d66eadebf2779df5ddd68cf12f3ccfdc6bfe760000000000000000000000000000000000000000000000000000000006ac2eb670000000000000000000000000000000000000000000000000000000000000080000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000007b83c20431b800000000000000000000000000000000000000000000000000014e17aacfb2d1".into(),
             builder: builder.clone(),
             trace_address: None,
+            from: None,
         }];
         let log = |emitter: &str, tx_hash: &str, tx_position, cumulative_gas_before, log_index| PropammLog {
             block_number: 26_122_500,
@@ -709,10 +738,11 @@ mod tests {
             tx_position,
             cumulative_gas_before,
             log_index,
-            topic0: SWAPPED.into(),
+            topic0: if emitter == ENGINE { ENGINE_UPDATE } else { SWAPPED }.into(),
             builder: builder.clone(),
         };
         let logs = [
+            log(ENGINE, "0x8aaa37b83464c5ba28d2014ad04f23e6e6096038a8e40bc3063f834336161242", 161, 22_735_744, 1438),
             log(ZORRO, "0x1ba8005ea98f26f2733d742b7d4d77b94963f92e47ea8e896719899ba59850dc", 152, 22_013_601, 1428),
             log(FERMI, "0xe57c944d04fda02fc0a5da3eaac1647d7420009b63c6e1f574c4d99c71441ed4", 163, 22_860_158, 1445),
             log(ZORRO, "0xa9dcbfa696780cdad9b1b93f591a48c1e18970eed0b6ac10f12a77a390e15174", 220, 33_924_910, 1759),
@@ -724,10 +754,17 @@ mod tests {
             pool: address.into(),
             kind: PropammEventKind::Fill,
         };
+        let engine_rule = PropammEventRule {
+            emitter: ENGINE.into(),
+            topic0: ENGINE_UPDATE.into(),
+            venue: "fermiswap".into(),
+            pool: FERMI.into(),
+            kind: PropammEventKind::Update,
+        };
         let events = decode_propamm_activity(
             &logs,
             &calls,
-            &[rule("fermiswap", FERMI), rule("el_zorro", ZORRO)],
+            &[rule("fermiswap", FERMI), rule("el_zorro", ZORRO), engine_rule],
             "0xda7afeed021eafc1c1af9c362de477dad0396b81",
             &[PropammRegistryTarget {
                 target: ZORRO.into(),
@@ -754,11 +791,117 @@ mod tests {
         assert_eq!(
             found,
             [
-                ("fermiswap", 163, None, None, None, 1),
+                ("fermiswap", 163, Some(161), Some(2), Some(124_414), 1),
                 ("el_zorro", 152, Some(151), Some(1), Some(36_690), 1),
                 ("el_zorro", 220, Some(151), Some(69), Some(11_947_999), 2),
             ]
         );
+    }
+
+    #[test]
+    fn golden_block_26122767_ignores_bopamm_self_writes_when_pairing() {
+        // Collected from Xatu canonical execution data and traces for mainnet
+        // block 26122767 (2026-10-05, Titan). A signed batch update for the
+        // bopAMM target at transaction 1 precedes bopAMM fills at 3 and 112.
+        // Inside each fill, the target itself calls the registry's
+        // `updateState`. Those self-writes are not maker updates: fill 112
+        // must pair with transaction 1, not with the write inside fill 3.
+        const BOPAMM: &str = "0xb09aaa8933626d7e4c48d65dad2d77021cfbca9a";
+        const TARGET: &str = "0xb09999a44e3240193193be9dd99cc73c8cc945a6";
+        const REGISTRY: &str = "0xda7afeed021eafc1c1af9c362de477dad0396b81";
+        const SWAPPED: &str = "0x1eeaa4acf3c225a4033105c2647625dbb298dec93b14e16253c4231e26c02b1d";
+        let builder = Some("titan (titanbuilder.xyz)".to_string());
+        let call = |tx_hash: &str, tx_position, cumulative_gas_before, input: &str, trace_address: Option<&str>| PropammCall {
+            block_number: 26_122_767,
+            to: REGISTRY.into(),
+            tx_hash: tx_hash.into(),
+            tx_position,
+            cumulative_gas_before,
+            input: input.into(),
+            builder: builder.clone(),
+            trace_address: trace_address.map(Into::into),
+            from: trace_address.map(|_| TARGET.into()),
+        };
+        let calls = [
+            call(
+                "0x32cb566c28caaef2225ba14923422ee74d9b12bd59a82e56124ff128393690bb",
+                1,
+                243_328,
+                "0xe50de8ea000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000020000000000000000000000000b09999a44e3240193193be9dd99cc73c8cc945a6000000000000000000000000b09999a44e3240193193be9dd99cc73c8cc945a60000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000006ac2f7eb00000000000000000000000000000000000000000000000000000000000000c0000000000000000000000000000000000000000000000000000000000000016000000000000000000000000000000000000000000000000000000000000000040000000000008214ae0000204295500006085264000000000000000000000000016fff01bb70000000000000000000016f0901efff025fff10cfff000000000001e0f002c0f003a1e008e2d111a4b201e18302c18303a30608e48a11a791000004702504c04907816f152729262e5204802504c04907716f151729262e52000000000000000000000000000000000000000000000000000000000000000004e00000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000006ac2f7eb00000000000000000000000075d09fbc52e567f0d52179e2eb67abcfcd1262d000000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000000000003000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000001a000000000000000000000000000000000000000000000000000000000000002e00000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000004295c0000000000000000000000000000000000000000000000000000000000000000016fff01bb70000000000000000000016f0901efff025fff10cfff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c000000000000000000000000000000000000000000000000000000000000000410f4b9b08c812e132eef360608f5e0092288b7b1b6496fd5f8dfd1db2a12fb94941f7bfa675a44a81357930ed2181626116add5ba3ef099d548f01574d15835c41b0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000042955000000000000000000000000000000000000000000000000000000000000000001e0f002c0f003a1e008e2d111a4b201e18302c18303a30608e48a11a7910000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000c00000000000000000000000000000000000000000000000000000000000000041fb3e5bc6c8a50c45e50f1d54ed8e4b7b9c0f8a13b8e1d6ac4fb6a39a0c1b9dcc7cab6b879b8c4c251cb2ecfbda1163cdbf81136616a77c62890bba9c61b69f1a1b0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000030000000000000000000000000000000000000000000000000000000000042932000000000000000000000000000000000000000000000000000000000000000004702504c04907816f152729262e5204802504c04907716f151729262e520000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c0000000000000000000000000000000000000000000000000000000000000004183f2130479eeb8ebb9a14617bbae13ba7e463a4dac1e34f3f1d656640ff8b49967d05505c243f97a617e4c8d684ccca5f3ee4c701a2b1e02c9a8004377f00b601b000000000000000000000000000000000000000000000000000000000000000101f6957344bdde554682c26ea0aa879ec700000000000002abfffffc540000",
+                None,
+            ),
+            call(
+                "0xd06c1205b44580e645ca8fd4f2e90efd585f727af480141230ace44bf45a04a0",
+                3,
+                1_159_621,
+                "0xa9114b0f000000000000000000000000b09999a44e3240193193be9dd99cc73c8cc945a60000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000006ac2f7eb000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000040000000000008214ae0000204295500006085264000000000000000000000000016f2501bb70000000000000000000016f0901efff025fff10cfff000000000001e0f002c0f003a1e008e2d111a4b201e18302c18303a30608e48a11a791000004702504c04907816f152729262e5204802504c04907716f151729262e520000",
+                Some("0_0_6_0_1_0"),
+            ),
+            call(
+                "0x88c3afd8366af255cd989aea222d974b35337f340e3cd33602cccfa834130c66",
+                112,
+                15_388_887,
+                "0xa9114b0f000000000000000000000000b09999a44e3240193193be9dd99cc73c8cc945a60000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000006ac2f7eb000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000040000000000008214ae0000204295500006085264000000000000000000000000016df901bb70000000000000000000016f0901efff025fff10cfff000000000001e0f002c0f003a1e008e2d111a4b201e18302c18303a30608e48a11a791000004702504c04907816f152729262e5204802504c04907716f151729262e520000",
+                Some("0_0_1_2_0_1_0"),
+            ),
+        ];
+        let log = |tx_hash: &str, tx_position, cumulative_gas_before, log_index| PropammLog {
+            block_number: 26_122_767,
+            emitter: BOPAMM.into(),
+            tx_hash: tx_hash.into(),
+            tx_position,
+            cumulative_gas_before,
+            log_index,
+            topic0: SWAPPED.into(),
+            builder: builder.clone(),
+        };
+        let logs = [
+            log("0xd06c1205b44580e645ca8fd4f2e90efd585f727af480141230ace44bf45a04a0", 3, 1_159_621, 38),
+            log("0x88c3afd8366af255cd989aea222d974b35337f340e3cd33602cccfa834130c66", 112, 15_388_887, 475),
+        ];
+        let events = decode_propamm_activity(
+            &logs,
+            &calls,
+            &[PropammEventRule {
+                emitter: BOPAMM.into(),
+                topic0: SWAPPED.into(),
+                venue: "bopamm".into(),
+                pool: BOPAMM.into(),
+                kind: PropammEventKind::Fill,
+            }],
+            REGISTRY,
+            &[PropammRegistryTarget {
+                target: TARGET.into(),
+                venue: "bopamm".into(),
+                pool: BOPAMM.into(),
+            }],
+        )
+        .unwrap();
+        let kinds: Vec<_> = events.iter().map(|event| (event.tx_position, event.kind.clone())).collect();
+        assert_eq!(
+            kinds,
+            [
+                (1, PropammEventKind::Update),
+                (3, PropammEventKind::Fill),
+                (3, PropammEventKind::TargetWrite),
+                (112, PropammEventKind::Fill),
+                (112, PropammEventKind::TargetWrite),
+            ]
+        );
+        let found: Vec<_> = pair_propamm_events(&events)
+            .iter()
+            .map(|pair| {
+                (
+                    pair.fill_tx_position,
+                    pair.update_tx_position,
+                    pair.fills_before_next_update,
+                    pair.same_tx_update,
+                )
+            })
+            .collect();
+        assert_eq!(found, [(3, Some(1), 1, false), (112, Some(1), 2, false)]);
+        let blocks = summarize_propamm_blocks(&events, &pair_propamm_events(&events));
+        assert_eq!((blocks[0].updates, blocks[0].target_writes), (1, 2));
     }
 
     #[test]
@@ -783,6 +926,7 @@ mod tests {
             ),
             builder: Some("titan".into()),
             trace_address: None,
+            from: None,
         };
         let fill_log = PropammLog {
             block_number: 10,

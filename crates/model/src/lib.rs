@@ -238,6 +238,9 @@ pub struct PropammCall {
     /// transaction's top-level call.
     #[serde(default)]
     pub trace_address: Option<String>,
+    /// Immediate caller of an internal call; `None` for a top-level call.
+    #[serde(default)]
+    pub from: Option<String>,
 }
 
 /// A reviewed event rule. `pool` is explicit so a registry update may later be
@@ -280,6 +283,10 @@ pub struct BytecodeGroup {
 pub enum PropammEventKind {
     Update,
     Fill,
+    /// A registry write made by a reviewed target itself from inside another
+    /// transaction (for example bopAMM writing state back during a fill). It
+    /// is not a maker quote update and is never paired.
+    TargetWrite,
 }
 
 /// The receipt-order relationship for one PropAMM fill.
@@ -323,6 +330,8 @@ pub struct PropammBlockSummary {
     pub fills: u32,
     pub paired_fills: u32,
     pub fills_without_update: u32,
+    #[serde(default)]
+    pub target_writes: u32,
 }
 
 /// One canonical block in a measurement period with its builder signal; the

@@ -32,7 +32,8 @@ Tembri is a Rust toolbox for reproducible Ethereum execution and mempool measure
 | Market-volatility regimes | Planned. |
 | PropAMM coverage | The decoder is rule-driven. Only reviewed address/topic rules and explicitly allow-listed registry targets are decoded; it does not discover venues or infer fills from generic transfers. |
 | PropAMM pairing | A pair proves receipt order in a block, not that an update was the newest off-chain quote or that a builder received it first. |
-| PropAMM venues | Fills decode for FermiSwap and El Zorro; updates for El Zorro, Kipseli, Tempest and bopAMM. Fermi updates go to its unverified pricing engine and are not decoded, so Fermi fills are reported without an update. |
+| PropAMM venues | Fills decode for FermiSwap, El Zorro and bopAMM; updates for all three plus Kipseli and Tempest. Fermi updates are the pricing engine's event, accepted on BuilderNet's description because the engine is unverified. |
+| PropAMM target self-writes | A registry write whose caller is the reviewed target itself (bopAMM inside every fill) is `target_write`, not an update, and is never paired. |
 | PropAMM same-transaction updates | Execution data cannot order an internal update against a log in one transaction. Such an update is flagged (`same_tx_update`) and never paired. |
 | PropAMM update timestamps | Priority Update Registry signed batches carry a maker-selected timestamp. It is retained on decoded update rows but has not yet been used for quote-age or markout analysis. |
 
