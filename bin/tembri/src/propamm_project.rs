@@ -5,9 +5,11 @@
 //! each transaction's position, cumulative gas before it, and the block's
 //! builder signal. Venue and kind are assigned only by `propamm-decode`.
 //!
-//! Registry updates made through an internal call are not visible here; they
-//! need trace projection. Downstream unmatched fills must be read with that
-//! coverage boundary in mind.
+//! Without traces only top-level registry transactions are visible. With
+//! traces, internal `call` frames to the registry are added when neither the
+//! frame nor any ancestor reverted. `static_call` frames are reads and
+//! `delegate_call` frames run registry code in another contract's storage, so
+//! neither is an update.
 
 use crate::{builder_name, parquet_text, parquet_u64, xatu_plan_files, xatu_reader};
 use parquet::file::reader::{FileReader, SerializedFileReader};
@@ -15,7 +17,7 @@ use parquet::record::RowAccessor;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use tlm_model::{PropammCall, PropammLog};
+use tlm_model::{PropammCall, PropammLog, PropammPeriodBlock};
 
 #[derive(Clone, Debug)]
 pub(crate) struct XatuBlockHeader {
@@ -33,6 +35,21 @@ pub(crate) struct XatuTxRow {
     pub input: Option<String>,
     pub gas_used: u64,
     pub success: bool,
+}
+
+/// A trace frame. Only frames sent to the registry and frames that reverted
+/// are retained: the latter are needed to tell whether an ancestor reverted.
+#[derive(Clone, Debug)]
+pub(crate) struct XatuTraceRow {
+    pub block_number: u64,
+    pub tx_index: u32,
+    pub tx_hash: String,
+    /// Path from the top-level frame; empty for the top-level frame itself.
+    pub trace_address: Vec<u32>,
+    pub to: Option<String>,
+    pub call_type: String,
+    pub input: Option<String>,
+    pub reverted: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -53,9 +70,14 @@ pub(crate) fn project_propamm_rows(
     headers: &HashMap<u64, XatuBlockHeader>,
     txs: &[XatuTxRow],
     logs: &[XatuLogRow],
+    traces: Option<&[XatuTraceRow]>,
     registry: &str,
     emitters: &BTreeSet<String>,
 ) -> Result<(Vec<PropammLog>, Vec<PropammCall>), String> {
+    let internal = match traces {
+        Some(traces) => internal_registry_calls(txs, traces, registry)?,
+        None => Vec::new(),
+    };
     let mut by_block: BTreeMap<u64, Vec<&XatuTxRow>> = BTreeMap::new();
     for tx in txs {
         by_block.entry(tx.block_number).or_default().push(tx);
@@ -71,6 +93,7 @@ pub(crate) fn project_propamm_rows(
             .filter(|tx| is_registry_call(tx, registry))
             .map(|tx| tx.block_number),
     );
+    relevant_blocks.extend(internal.iter().map(|frame| frame.block_number));
 
     // (block, tx index) -> (tx row, cumulative gas before it)
     let mut positions: HashMap<(u64, u32), (&XatuTxRow, u64)> = HashMap::new();
@@ -111,6 +134,40 @@ pub(crate) fn project_propamm_rows(
             cumulative_gas_before,
             input: tx.input.clone().unwrap_or_else(|| "0x".into()),
             builder: headers[&tx.block_number].builder.clone(),
+            trace_address: None,
+        });
+    }
+    for frame in internal {
+        let (tx, cumulative_gas_before) = positions
+            .get(&(frame.block_number, frame.tx_index))
+            .ok_or_else(|| {
+                format!(
+                    "trace in block {} has no transaction at index {}",
+                    frame.block_number, frame.tx_index
+                )
+            })?;
+        if !tx.hash.eq_ignore_ascii_case(&frame.tx_hash) {
+            return Err(format!(
+                "trace in block {} names {} but transaction index {} is {}",
+                frame.block_number, frame.tx_hash, frame.tx_index, tx.hash
+            ));
+        }
+        calls.push(PropammCall {
+            block_number: frame.block_number,
+            to: registry.to_ascii_lowercase(),
+            tx_hash: frame.tx_hash.clone(),
+            tx_position: frame.tx_index,
+            cumulative_gas_before: *cumulative_gas_before,
+            input: frame.input.clone().unwrap_or_else(|| "0x".into()),
+            builder: headers[&frame.block_number].builder.clone(),
+            trace_address: Some(
+                frame
+                    .trace_address
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join("_"),
+            ),
         });
     }
 
@@ -150,23 +207,75 @@ pub(crate) fn project_propamm_rows(
     Ok((projected_logs, calls))
 }
 
+/// Internal registry `call` frames whose state change persisted.
+///
+/// Also checks that every top-level registry call has its top-level frame in
+/// the traces, so an incomplete traces partition fails instead of silently
+/// dropping internal updates.
+fn internal_registry_calls<'a>(
+    txs: &[XatuTxRow],
+    traces: &'a [XatuTraceRow],
+    registry: &str,
+) -> Result<Vec<&'a XatuTraceRow>, String> {
+    let mut reverted: HashMap<&str, Vec<&[u32]>> = HashMap::new();
+    let mut roots: BTreeSet<String> = BTreeSet::new();
+    for frame in traces {
+        if frame.reverted {
+            reverted
+                .entry(frame.tx_hash.as_str())
+                .or_default()
+                .push(&frame.trace_address);
+        }
+        if frame.trace_address.is_empty() && to_registry(frame.to.as_deref(), registry) {
+            roots.insert(frame.tx_hash.to_ascii_lowercase());
+        }
+    }
+    if let Some(missing) = txs
+        .iter()
+        .filter(|tx| is_registry_call(tx, registry))
+        .find(|tx| !roots.contains(&tx.hash.to_ascii_lowercase()))
+    {
+        return Err(format!(
+            "traces lack the top-level frame of registry transaction {}",
+            missing.hash
+        ));
+    }
+    Ok(traces
+        .iter()
+        .filter(|frame| !frame.trace_address.is_empty())
+        .filter(|frame| frame.call_type == "call" && to_registry(frame.to.as_deref(), registry))
+        .filter(|frame| {
+            !reverted.get(frame.tx_hash.as_str()).is_some_and(|paths| {
+                paths
+                    .iter()
+                    .any(|path| frame.trace_address.starts_with(path))
+            })
+        })
+        .collect())
+}
+
+fn to_registry(to: Option<&str>, registry: &str) -> bool {
+    to.is_some_and(|to| to.eq_ignore_ascii_case(registry))
+}
+
 /// A reverted registry call did not change state, so it is not an update.
 fn is_registry_call(tx: &XatuTxRow, registry: &str) -> bool {
-    tx.success
-        && tx
-            .to
-            .as_deref()
-            .is_some_and(|to| to.eq_ignore_ascii_case(registry))
+    tx.success && to_registry(tx.to.as_deref(), registry)
 }
+
+/// Decoder inputs plus every period block's builder signal.
+pub(crate) type ProjectedPlan = (Vec<PropammLog>, Vec<PropammCall>, Vec<PropammPeriodBlock>);
 
 /// Read and project every partition in the plan, restricted to its blocks.
 pub(crate) fn project_xatu_plan(
     plan: &tlm_report::ReportPlan,
     registry: &str,
     emitters: &BTreeSet<String>,
-) -> Result<(Vec<PropammLog>, Vec<PropammCall>), String> {
+    with_traces: bool,
+) -> Result<ProjectedPlan, String> {
     let mut all_logs = Vec::new();
     let mut all_calls = Vec::new();
+    let mut period_blocks = Vec::new();
     for blocks_path in xatu_plan_files(plan, "blocks")? {
         let partition = blocks_path
             .parent()
@@ -177,16 +286,30 @@ pub(crate) fn project_xatu_plan(
                 .is_none_or(|blocks| blocks.contains(&block))
         };
         let headers = read_headers(&blocks_path, &selected)?;
+        period_blocks.extend(headers.iter().map(|(block_number, header)| PropammPeriodBlock {
+            block_number: *block_number,
+            builder: header.builder.clone(),
+        }));
         let txs = read_txs(&partition.join("transactions.parquet"), registry, &selected)?;
         let logs = read_logs(&partition.join("logs.parquet"), emitters, &selected)?;
-        let (logs, calls) = project_propamm_rows(&headers, &txs, &logs, registry, emitters)
+        let traces = if with_traces {
+            Some(read_traces(&partition.join("traces.parquet"), registry, &selected)?)
+        } else {
+            None
+        };
+        let (logs, calls) =
+            project_propamm_rows(&headers, &txs, &logs, traces.as_deref(), registry, emitters)
             .map_err(|error| format!("{}: {error}", partition.display()))?;
         all_logs.extend(logs);
         all_calls.extend(calls);
     }
     all_logs.sort_by_key(|log| (log.block_number, log.tx_position, log.log_index));
-    all_calls.sort_by_key(|call| (call.block_number, call.tx_position));
-    Ok((all_logs, all_calls))
+    all_calls.sort_by(|left, right| {
+        (left.block_number, left.tx_position, &left.trace_address)
+            .cmp(&(right.block_number, right.tx_position, &right.trace_address))
+    });
+    period_blocks.sort_by_key(|block| block.block_number);
+    Ok((all_logs, all_calls, period_blocks))
 }
 
 /// Resolve Xatu columns by name: physical positions differ between schema
@@ -265,6 +388,70 @@ fn read_txs(
         });
     }
     Ok(txs)
+}
+
+fn read_traces(
+    path: &PathBuf,
+    registry: &str,
+    selected: &impl Fn(u64) -> bool,
+) -> Result<Vec<XatuTraceRow>, String> {
+    if !path.is_file() {
+        return Err(format!("{} is missing; fetch the traces dataset", path.display()));
+    }
+    let reader = xatu_reader(path)?;
+    let [number, tx_index, tx_hash, to, input, call_type, trace_address, error] = columns(
+        &reader,
+        path,
+        &[
+            "block_number",
+            "transaction_index",
+            "transaction_hash",
+            "action_to",
+            "action_input",
+            "action_call_type",
+            "trace_address",
+            "error",
+        ],
+    )?[..]
+    else {
+        unreachable!("eight columns requested")
+    };
+    let mut frames = Vec::new();
+    for row in reader.get_row_iter(None).map_err(|e| e.to_string())? {
+        let row = row.map_err(|e| e.to_string())?;
+        let target = parquet_text(&row, to);
+        let is_registry = to_registry(target.as_deref(), registry);
+        let reverted = parquet_text(&row, error).is_some_and(|error| !error.is_empty());
+        if !is_registry && !reverted {
+            continue;
+        }
+        let block_number = parquet_u64(&row, number)?;
+        if !selected(block_number) {
+            continue;
+        }
+        frames.push(XatuTraceRow {
+            block_number,
+            tx_index: u32::try_from(parquet_u64(&row, tx_index)?).map_err(|e| e.to_string())?,
+            tx_hash: parquet_text(&row, tx_hash).ok_or("trace without transaction hash")?,
+            trace_address: parse_trace_address(parquet_text(&row, trace_address).as_deref())?,
+            to: target,
+            call_type: parquet_text(&row, call_type).unwrap_or_default(),
+            input: if is_registry { parquet_text(&row, input) } else { None },
+            reverted,
+        });
+    }
+    Ok(frames)
+}
+
+/// Xatu writes a frame path as `0_1_2`; the top-level frame has no path.
+fn parse_trace_address(value: Option<&str>) -> Result<Vec<u32>, String> {
+    match value {
+        None | Some("") => Ok(Vec::new()),
+        Some(path) => path
+            .split('_')
+            .map(|part| part.parse().map_err(|_| format!("invalid trace address {path}")))
+            .collect(),
+    }
 }
 
 fn read_logs(
@@ -359,7 +546,7 @@ mod tests {
         ];
         let logs = [log(10, 2, &FERMI.to_ascii_uppercase()), log(10, 0, "0xunreviewed")];
         let (logs, calls) =
-            project_propamm_rows(&headers(180), &txs, &logs, REGISTRY, &emitters()).unwrap();
+            project_propamm_rows(&headers(180), &txs, &logs, None, REGISTRY, &emitters()).unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].tx_position, 1);
         assert_eq!(calls[0].cumulative_gas_before, 100);
@@ -370,27 +557,81 @@ mod tests {
         assert_eq!(logs[0].cumulative_gas_before, 130);
     }
 
+    fn frame(index: u32, path: &[u32], to: &str, call_type: &str, reverted: bool) -> XatuTraceRow {
+        XatuTraceRow {
+            block_number: 10,
+            tx_index: index,
+            tx_hash: format!("0x10{index}"),
+            trace_address: path.to_vec(),
+            to: Some(to.into()),
+            call_type: call_type.into(),
+            input: Some("0xa9114b0f".into()),
+            reverted,
+        }
+    }
+
+    #[test]
+    fn projects_persisted_internal_registry_calls_only() {
+        let txs = [
+            tx(10, 0, REGISTRY, 30, true),
+            tx(10, 1, "0xmaker", 50, true),
+            tx(10, 2, "0xrouter", 70, true),
+        ];
+        let traces = [
+            frame(0, &[], REGISTRY, "call", false),
+            frame(1, &[0], REGISTRY, "call", false),
+            frame(1, &[1], REGISTRY, "static_call", false),
+            frame(1, &[2], REGISTRY, "delegate_call", false),
+            frame(2, &[0], "0xpool", "call", true),
+            frame(2, &[0, 3], REGISTRY, "call", false),
+            frame(2, &[1, 0], REGISTRY, "call", false),
+        ];
+        let (_, calls) =
+            project_propamm_rows(&headers(150), &txs, &[], Some(&traces), REGISTRY, &emitters())
+                .unwrap();
+        let found: Vec<_> = calls
+            .iter()
+            .map(|call| (call.tx_position, call.trace_address.as_deref(), call.cumulative_gas_before))
+            .collect();
+        assert_eq!(
+            found,
+            [(0, None, 0), (1, Some("0"), 30), (2, Some("1_0"), 80)]
+        );
+    }
+
+    #[test]
+    fn fails_closed_when_traces_lack_a_top_level_registry_call() {
+        let txs = [tx(10, 0, REGISTRY, 30, true)];
+        assert!(
+            project_propamm_rows(&headers(30), &txs, &[], Some(&[]), REGISTRY, &emitters())
+                .unwrap_err()
+                .contains("lack the top-level frame")
+        );
+        assert_eq!(parse_trace_address(Some("0_12_3")).unwrap(), [0, 12, 3]);
+        assert!(parse_trace_address(None).unwrap().is_empty());
+    }
+
     #[test]
     fn drops_reverted_registry_calls() {
         let txs = [tx(10, 0, REGISTRY, 30, false)];
-        let (_, calls) = project_propamm_rows(&headers(30), &txs, &[], REGISTRY, &emitters()).unwrap();
+        let (_, calls) = project_propamm_rows(&headers(30), &txs, &[], None, REGISTRY, &emitters()).unwrap();
         assert!(calls.is_empty());
     }
 
     #[test]
     fn fails_closed_on_incomplete_block_transactions() {
         let gap = [tx(10, 0, "0xother", 100, true), tx(10, 2, REGISTRY, 30, true)];
-        assert!(project_propamm_rows(&headers(130), &gap, &[], REGISTRY, &emitters())
+        assert!(project_propamm_rows(&headers(130), &gap, &[], None, REGISTRY, &emitters())
             .unwrap_err()
             .contains("not contiguous"));
 
         let short = [tx(10, 0, REGISTRY, 30, true)];
-        assert!(project_propamm_rows(&headers(999), &short, &[], REGISTRY, &emitters())
+        assert!(project_propamm_rows(&headers(999), &short, &[], None, REGISTRY, &emitters())
             .unwrap_err()
             .contains("does not match block gas_used"));
 
         let orphan = [log(10, 0, FERMI)];
-        assert!(project_propamm_rows(&headers(0), &[], &orphan, REGISTRY, &emitters())
+        assert!(project_propamm_rows(&headers(0), &[], &orphan, None, REGISTRY, &emitters())
             .unwrap_err()
             .contains("no transaction"));
     }

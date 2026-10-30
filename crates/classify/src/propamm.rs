@@ -9,7 +9,7 @@ use tiny_keccak::{Hasher, Keccak};
 use tlm_model::{
     BytecodeGroup, BytecodeRow, PropammBlockSummary, PropammBuilderSummary, PropammCall,
     PropammEvent, PropammEventKind, PropammEventRule, PropammFillPair, PropammLog,
-    PropammPairingResult, PropammRegistryTarget,
+    PropammPairingResult, PropammPeriodBlock, PropammRegistryTarget,
 };
 
 /// Selector for `batchUpdateStateWithSignature((address,address,uint256,uint32,uint256[],bytes)[])`.
@@ -25,16 +25,7 @@ pub fn group_runtime_bytecode(rows: &[BytecodeRow]) -> Result<Vec<BytecodeGroup>
         if code.is_empty() {
             return Err(format!("{} has empty runtime bytecode", row.address));
         }
-        let mut hash = [0u8; 32];
-        let mut keccak = Keccak::v256();
-        keccak.update(&code);
-        keccak.finalize(&mut hash);
-        let hash = format!(
-            "0x{}",
-            hash.iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>()
-        );
+        let hash = keccak256_hex(&code);
         groups
             .entry(hash)
             .or_default()
@@ -51,6 +42,20 @@ pub fn group_runtime_bytecode(rows: &[BytecodeRow]) -> Result<Vec<BytecodeGroup>
             }
         })
         .collect())
+}
+
+/// Keccak-256 of `bytes`, as `0x`-prefixed lowercase hex.
+fn keccak256_hex(bytes: &[u8]) -> String {
+    let mut hash = [0u8; 32];
+    let mut keccak = Keccak::v256();
+    keccak.update(bytes);
+    keccak.finalize(&mut hash);
+    format!(
+        "0x{}",
+        hash.iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
 }
 
 /// Decode reviewed targets from the registry's signed-update batch calldata.
@@ -302,19 +307,26 @@ pub fn pair_propamm_events(events: &[PropammEvent]) -> Vec<PropammFillPair> {
                 })
         });
 
-        let mut latest_update: Option<&PropammEvent> = None;
+        // `prior` is the latest update in an earlier transaction; `in_tx` is an
+        // update in the transaction being read. Only `prior` can pair: within
+        // one transaction an internal update call cannot be ordered against a
+        // fill log, so a same-transaction update is reported but never paired,
+        // and it does not hide an earlier qualifying update.
+        let mut prior: Option<&PropammEvent> = None;
+        let mut in_tx: Option<&PropammEvent> = None;
         let mut fills_since_update = 0u32;
         for event in group {
+            if in_tx.is_some_and(|update| update.tx_position < event.tx_position) {
+                prior = in_tx.take();
+                fills_since_update = 0;
+            }
             match event.kind {
-                PropammEventKind::Update => {
-                    latest_update = Some(event);
-                    fills_since_update = 0;
-                }
+                PropammEventKind::Update => in_tx = Some(event),
                 PropammEventKind::Fill => {
                     fills_since_update = fills_since_update.saturating_add(1);
                     let (update_tx_hash, update_tx_position, transaction_gap, gas_gap) =
-                        match latest_update {
-                            Some(update) if update.tx_position < event.tx_position => (
+                        match prior {
+                            Some(update) => (
                                 Some(update.tx_hash.clone()),
                                 Some(update.tx_position),
                                 Some(event.tx_position - update.tx_position),
@@ -324,7 +336,7 @@ pub fn pair_propamm_events(events: &[PropammEvent]) -> Vec<PropammFillPair> {
                                         .saturating_sub(update.cumulative_gas_before),
                                 ),
                             ),
-                            _ => (None, None, None, None),
+                            None => (None, None, None, None),
                         };
                     pairs.push(PropammFillPair {
                         block_number: event.block_number,
@@ -343,6 +355,7 @@ pub fn pair_propamm_events(events: &[PropammEvent]) -> Vec<PropammFillPair> {
                         transaction_gap,
                         gas_gap,
                         fills_before_next_update: fills_since_update,
+                        same_tx_update: in_tx.is_some(),
                     });
                 }
             }
@@ -412,6 +425,7 @@ pub fn summarize_propamm_builders(
             .entry(block.builder.clone())
             .or_insert_with(|| PropammBuilderSummary {
                 builder: block.builder.clone(),
+                period_blocks: None,
                 active_blocks: 0,
                 updates: 0,
                 fills: 0,
@@ -429,6 +443,49 @@ pub fn summarize_propamm_builders(
             .saturating_add(block.fills_without_update);
     }
     rows.into_values().collect()
+}
+
+/// Add each builder's total blocks in the period, so block and fill shares
+/// share one denominator. Builders without PropAMM activity get a zero row;
+/// active blocks outside the period are an input error.
+pub fn add_period_blocks(
+    builders: &[PropammBuilderSummary],
+    period: &[PropammPeriodBlock],
+    active: &[PropammBlockSummary],
+) -> Result<Vec<PropammBuilderSummary>, String> {
+    let in_period: BTreeSet<u64> = period.iter().map(|block| block.block_number).collect();
+    if let Some(outside) = active
+        .iter()
+        .find(|block| !in_period.contains(&block.block_number))
+    {
+        return Err(format!(
+            "PropAMM block {} is not in the supplied period blocks",
+            outside.block_number
+        ));
+    }
+    let mut counts: BTreeMap<Option<String>, u32> = BTreeMap::new();
+    for block in period {
+        let count = counts.entry(block.builder.clone()).or_default();
+        *count = count.saturating_add(1);
+    }
+    let mut rows: BTreeMap<Option<String>, PropammBuilderSummary> = builders
+        .iter()
+        .map(|row| (row.builder.clone(), row.clone()))
+        .collect();
+    for (builder, count) in counts {
+        rows.entry(builder.clone())
+            .or_insert_with(|| PropammBuilderSummary {
+                builder,
+                period_blocks: None,
+                active_blocks: 0,
+                updates: 0,
+                fills: 0,
+                paired_fills: 0,
+                fills_without_update: 0,
+            })
+            .period_blocks = Some(count);
+    }
+    Ok(rows.into_values().collect())
 }
 
 #[cfg(test)]
@@ -502,6 +559,7 @@ mod tests {
             cumulative_gas_before: 10,
             input,
             builder: Some("titan".into()),
+            trace_address: None,
         };
         let targets = [PropammRegistryTarget {
             target: "0x00000000000000000000000000000000000000aa".into(),
@@ -534,6 +592,7 @@ mod tests {
                 number_word(42),
             ),
             builder: Some("titan".into()),
+            trace_address: None,
         };
         let targets = [PropammRegistryTarget {
             target: "0x00000000000000000000000000000000000000aa".into(),
@@ -556,6 +615,7 @@ mod tests {
             cumulative_gas_before: 0,
             input: "0x12345678".into(),
             builder: None,
+            trace_address: None,
         };
         assert!(decode_registry_batch_updates(&call, "0xregistry", &[])
             .unwrap()
@@ -578,6 +638,7 @@ mod tests {
             cumulative_gas_before: 0,
             input: "0xa9114b0f00000000000000000000000000000003f1ec2379e79f58e12ec6c4f51ee921492b2f5776e38002e0c013d0d89828fdb06fee595ea2d5ed4b194e3883e823e350000000000000000000000000000000000000000000000000000000006ae255b3000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000020000000000000000d00cf6847000870cf1df6000480cad41c000008da701af820000018b0df5caf001510dacf130011e0d5625a000fe0d2991b800e60d1f0750".into(),
             builder: Some("buildernet".into()),
+            trace_address: None,
         }];
         let logs = [PropammLog {
             block_number: 26_293_512,
@@ -621,6 +682,86 @@ mod tests {
     }
 
     #[test]
+    fn golden_block_26122500_pairs_el_zorro_fills_and_keeps_fermi_unmatched() {
+        // Collected from Xatu canonical execution data for mainnet block
+        // 26122500 (2026-10-05, Titan). A direct registry update for El Zorro
+        // at transaction 151 precedes El Zorro fills at 152 and 220. The Fermi
+        // fill at 163 emits the same Swapped topic but reads a different
+        // pricing engine, so it must stay unmatched.
+        const ZORRO: &str = "0xcf211b4dd0d2be5c173ea57bcf938fc61d1d3bd3";
+        const FERMI: &str = "0x5979458912f80b96d30d4220af8e2e4925a33320";
+        const SWAPPED: &str = "0x1eeaa4acf3c225a4033105c2647625dbb298dec93b14e16253c4231e26c02b1d";
+        let builder = Some("titan (titanbuilder.xyz)".to_string());
+        let calls = [PropammCall {
+            block_number: 26_122_500,
+            to: "0xda7afeed021eafc1c1af9c362de477dad0396b81".into(),
+            tx_hash: "0x78c8dd7888fad6d31e123139f0facd9854617c8f7c5f6718fe7810a69f94920d".into(),
+            tx_position: 151,
+            cumulative_gas_before: 21_976_911,
+            input: "0xa9114b0f000000000000000000000000cf211b4dd0d2be5c173ea57bcf938fc61d1d3bd385053f65cd1ece2bb37b70c13d66eadebf2779df5ddd68cf12f3ccfdc6bfe760000000000000000000000000000000000000000000000000000000006ac2eb670000000000000000000000000000000000000000000000000000000000000080000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000007b83c20431b800000000000000000000000000000000000000000000000000014e17aacfb2d1".into(),
+            builder: builder.clone(),
+            trace_address: None,
+        }];
+        let log = |emitter: &str, tx_hash: &str, tx_position, cumulative_gas_before, log_index| PropammLog {
+            block_number: 26_122_500,
+            emitter: emitter.into(),
+            tx_hash: tx_hash.into(),
+            tx_position,
+            cumulative_gas_before,
+            log_index,
+            topic0: SWAPPED.into(),
+            builder: builder.clone(),
+        };
+        let logs = [
+            log(ZORRO, "0x1ba8005ea98f26f2733d742b7d4d77b94963f92e47ea8e896719899ba59850dc", 152, 22_013_601, 1428),
+            log(FERMI, "0xe57c944d04fda02fc0a5da3eaac1647d7420009b63c6e1f574c4d99c71441ed4", 163, 22_860_158, 1445),
+            log(ZORRO, "0xa9dcbfa696780cdad9b1b93f591a48c1e18970eed0b6ac10f12a77a390e15174", 220, 33_924_910, 1759),
+        ];
+        let rule = |venue: &str, address: &str| PropammEventRule {
+            emitter: address.into(),
+            topic0: SWAPPED.into(),
+            venue: venue.into(),
+            pool: address.into(),
+            kind: PropammEventKind::Fill,
+        };
+        let events = decode_propamm_activity(
+            &logs,
+            &calls,
+            &[rule("fermiswap", FERMI), rule("el_zorro", ZORRO)],
+            "0xda7afeed021eafc1c1af9c362de477dad0396b81",
+            &[PropammRegistryTarget {
+                target: ZORRO.into(),
+                venue: "el_zorro".into(),
+                pool: ZORRO.into(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(events[0].update_timestamp, Some(0x6ac2_eb67));
+        let pairs = pair_propamm_events(&events);
+        let found: Vec<_> = pairs
+            .iter()
+            .map(|pair| {
+                (
+                    pair.venue.as_str(),
+                    pair.fill_tx_position,
+                    pair.update_tx_position,
+                    pair.transaction_gap,
+                    pair.gas_gap,
+                    pair.fills_before_next_update,
+                )
+            })
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("fermiswap", 163, None, None, None, 1),
+                ("el_zorro", 152, Some(151), Some(1), Some(36_690), 1),
+                ("el_zorro", 220, Some(151), Some(69), Some(11_947_999), 2),
+            ]
+        );
+    }
+
+    #[test]
     fn combines_reviewed_update_and_fill_evidence_for_pairing() {
         let address_word = |address: &str| format!("{:0>64}", address.trim_start_matches("0x"));
         let number_word = |number: u64| format!("{number:064x}");
@@ -641,6 +782,7 @@ mod tests {
                 number_word(1_700_000_000),
             ),
             builder: Some("titan".into()),
+            trace_address: None,
         };
         let fill_log = PropammLog {
             block_number: 10,
@@ -701,6 +843,17 @@ mod tests {
     }
 
     #[test]
+    fn reviewed_swapped_topic_is_the_verified_abi_signature_hash() {
+        // FermiSwap (Etherscan ABI view) and El Zorro's verified implementation
+        // `PropAMM` at 0x9c39d26b… (Sourcify exact match) both declare
+        // Swapped(address indexed,address indexed,address indexed,uint256,uint256,address).
+        assert_eq!(
+            keccak256_hex(b"Swapped(address,address,address,uint256,uint256,address)"),
+            "0x1eeaa4acf3c225a4033105c2647625dbb298dec93b14e16253c4231e26c02b1d"
+        );
+    }
+
+    #[test]
     fn groups_exact_runtime_bytecode_by_keccak_hash() {
         let groups = group_runtime_bytecode(&[
             BytecodeRow {
@@ -757,6 +910,30 @@ mod tests {
     }
 
     #[test]
+    fn same_transaction_update_is_flagged_and_does_not_hide_an_earlier_update() {
+        let pairs = pair_propamm_events(&[
+            event(1, 10, PropammEventKind::Update),
+            event(5, 50, PropammEventKind::Update),
+            event(5, 50, PropammEventKind::Fill),
+            event(6, 60, PropammEventKind::Fill),
+        ]);
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs[0].update_tx_position, Some(1));
+        assert!(pairs[0].same_tx_update);
+        assert_eq!(pairs[0].fills_before_next_update, 1);
+        assert_eq!(pairs[1].update_tx_position, Some(5));
+        assert!(!pairs[1].same_tx_update);
+        assert_eq!(pairs[1].fills_before_next_update, 1);
+
+        let alone = pair_propamm_events(&[
+            event(5, 50, PropammEventKind::Update),
+            event(5, 50, PropammEventKind::Fill),
+        ]);
+        assert_eq!(alone[0].result, PropammPairingResult::PropammFillWithoutUpdate);
+        assert!(alone[0].same_tx_update);
+    }
+
+    #[test]
     fn emits_explicit_unmatched_result_for_prior_fill_and_other_pool_update() {
         let mut other_pool = event(2, 20, PropammEventKind::Update);
         other_pool.pool = "0xother".into();
@@ -808,6 +985,32 @@ mod tests {
         assert_eq!(builders[0].fills_without_update, 1);
         assert_eq!(builders[1].builder.as_deref(), Some("titan"));
         assert_eq!(builders[1].paired_fills, 1);
+    }
+
+    #[test]
+    fn adds_period_block_denominators_including_inactive_builders() {
+        let events = vec![
+            event(1, 10, PropammEventKind::Update),
+            event(2, 20, PropammEventKind::Fill),
+        ];
+        let pairs = pair_propamm_events(&events);
+        let blocks = summarize_propamm_blocks(&events, &pairs);
+        let builders = summarize_propamm_builders(&blocks);
+        let period = [
+            PropammPeriodBlock { block_number: 10, builder: Some("titan".into()) },
+            PropammPeriodBlock { block_number: 11, builder: Some("titan".into()) },
+            PropammPeriodBlock { block_number: 12, builder: Some("other".into()) },
+        ];
+        let rows = add_period_blocks(&builders, &period, &blocks).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].builder.as_deref(), Some("other"));
+        assert_eq!((rows[0].period_blocks, rows[0].fills), (Some(1), 0));
+        assert_eq!(rows[1].builder.as_deref(), Some("titan"));
+        assert_eq!((rows[1].period_blocks, rows[1].active_blocks, rows[1].fills), (Some(2), 1, 1));
+
+        assert!(add_period_blocks(&builders, &period[1..], &blocks)
+            .unwrap_err()
+            .contains("not in the supplied period"));
     }
 
     #[test]

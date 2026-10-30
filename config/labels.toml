@@ -11,6 +11,11 @@ uniswap_v3_swap = "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fb
 # three addresses indexed. Reviewed against its deployed event logs and the
 # verified ABI view on Etherscan on 2026-10-28.
 propamm_fermiswap_fill = "0x1eeaa4acf3c225a4033105c2647625dbb298dec93b14e16253c4231e26c02b1d"
+# El Zorro emits the same Swapped event. Its EIP-1967 proxy
+# 0xcf211b4dd0d2be5c173ea57bcf938fc61d1d3bd3 resolves on Sourcify to the
+# verified implementation `PropAMM` at 0x9c39d26bef47f1c2450f89296dc8c3bc614b815b
+# (exact match), whose ABI declares the same signature. Reviewed 2026-10-29.
+propamm_el_zorro_fill = "0x1eeaa4acf3c225a4033105c2647625dbb298dec93b14e16253c4231e26c02b1d"
 
 # Add only selectors verified against the named protocol's deployed mainnet ABI.
 [liquidations]
@@ -50,6 +55,13 @@ fermiswap_entrypoint = "0x5979458912f80b96d30d4220af8e2e4925a33320"
 kipseli_entrypoint = "0x71e790dd841c8a9061487cb3e78c288e75ce0b3d"
 tempest_entrypoint = "0x00000003f1ec2379e79f58e12ec6c4f51ee92149"
 bopamm_entrypoint = "0xb09aaa5614916d7aeb59c295c52c92ca82addd76"
+# El Zorro: BuilderNet "stream address (pool and router)" and Lambda Class
+# deployed-contract table, both checked 2026-10-29.
+el_zorro_entrypoint = "0xcf211b4dd0d2be5c173ea57bcf938fc61d1d3bd3"
+# FermiSwap "state-override target (pricing engine)" per BuilderNet. Fermi
+# reads its quote state here, not from the registry. The contract is
+# unverified, so no update rule is enabled for it.
+fermiswap_pricing_engine = "0x0109aa912b58508886a2a707204b0f8c8b164ccc"
 metric_entrypoint = "0xe715dc29d2c273d0fc5a03e5cca9ccb0abb1dcdb"
 metric_compressed_oracle = "0xe844701934d9c6085b292e428f41b911cc0b3872"
 metric_pyth_oracle = "0x30a88bf894d1b806125a23ebf23d715496fd7102"
@@ -71,3 +83,9 @@ venue = "kipseli"
 target = "0xb09999a44e3240193193be9dd99cc73c8cc945a6"
 pool = "0xb09aaa5614916d7aeb59c295c52c92ca82addd76"
 venue = "bopamm"
+
+# El Zorro is both the registry target and the pool emitting Swapped.
+[[propamm.registry_targets]]
+target = "0xcf211b4dd0d2be5c173ea57bcf938fc61d1d3bd3"
+pool = "0xcf211b4dd0d2be5c173ea57bcf938fc61d1d3bd3"
+venue = "el_zorro"

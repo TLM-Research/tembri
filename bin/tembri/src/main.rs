@@ -408,7 +408,7 @@ fn propamm_project_cmd(v: Vec<String>) -> ExitCode {
         arg(&v, "--calls-out"),
     ) else {
         eprintln!(
-            "Usage: tembri propamm-project --xatu DIR [--period available|YYYY-MM|YYYY-MM-DD] --fill-rules RULES.ndjson --registry ADDRESS --logs-out LOGS.ndjson --calls-out CALLS.ndjson"
+            "Usage: tembri propamm-project --xatu DIR [--period available|YYYY-MM|YYYY-MM-DD] --fill-rules RULES.ndjson --registry ADDRESS [--with-traces] --logs-out LOGS.ndjson --calls-out CALLS.ndjson [--period-blocks-out BLOCKS.ndjson]"
         );
         return ExitCode::from(2);
     };
@@ -443,7 +443,8 @@ fn propamm_project_cmd(v: Vec<String>) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let (logs, calls) = match propamm_project::project_xatu_plan(&plan, &registry, &emitters) {
+    let with_traces = v.iter().any(|flag| flag == "--with-traces");
+    let (logs, calls, period_blocks) = match propamm_project::project_xatu_plan(&plan, &registry, &emitters, with_traces) {
         Ok(rows) => rows,
         Err(error) => {
             eprintln!("PropAMM projection failed: {error}");
@@ -457,6 +458,12 @@ fn propamm_project_cmd(v: Vec<String>) -> ExitCode {
     if let Err(error) = write_ndjson(&calls_out, &calls) {
         eprintln!("cannot write PropAMM calls: {error}");
         return ExitCode::from(1);
+    }
+    if let Some(path) = arg(&v, "--period-blocks-out") {
+        if let Err(error) = write_ndjson(&path, &period_blocks) {
+            eprintln!("cannot write period blocks: {error}");
+            return ExitCode::from(1);
+        }
     }
     println!(
         "wrote {} PropAMM log rows and {} registry call rows for {}",
@@ -540,7 +547,7 @@ fn propamm_pair(v: Vec<String>) -> ExitCode {
         arg(&v, "--builders-out"),
     ) else {
         eprintln!(
-            "Usage: tembri propamm-pair --input EVENTS.ndjson --pairs-out PAIRS.ndjson --blocks-out BLOCKS.ndjson --builders-out BUILDERS.ndjson"
+            "Usage: tembri propamm-pair --input EVENTS.ndjson --pairs-out PAIRS.ndjson --blocks-out BLOCKS.ndjson --builders-out BUILDERS.ndjson [--period-blocks BLOCKS.ndjson]"
         );
         return ExitCode::from(2);
     };
@@ -553,7 +560,23 @@ fn propamm_pair(v: Vec<String>) -> ExitCode {
     };
     let pairs = tlm_classify::pair_propamm_events(&events);
     let blocks = tlm_classify::summarize_propamm_blocks(&events, &pairs);
-    let builders = tlm_classify::summarize_propamm_builders(&blocks);
+    let mut builders = tlm_classify::summarize_propamm_builders(&blocks);
+    if let Some(path) = arg(&v, "--period-blocks") {
+        let period = match read_ndjson::<tlm_model::PropammPeriodBlock>(&path) {
+            Ok(rows) => rows,
+            Err(error) => {
+                eprintln!("invalid period-block input: {error}");
+                return ExitCode::from(2);
+            }
+        };
+        builders = match tlm_classify::add_period_blocks(&builders, &period, &blocks) {
+            Ok(rows) => rows,
+            Err(error) => {
+                eprintln!("PropAMM builder summary failed: {error}");
+                return ExitCode::from(2);
+            }
+        };
+    }
     if let Err(error) = write_ndjson(&pairs_out, &pairs) {
         eprintln!("cannot write PropAMM pairs: {error}");
         return ExitCode::from(1);

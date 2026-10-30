@@ -32,6 +32,8 @@ Tembri is a Rust toolbox for reproducible Ethereum execution and mempool measure
 | Market-volatility regimes | Planned. |
 | PropAMM coverage | The decoder is rule-driven. Only reviewed address/topic rules and explicitly allow-listed registry targets are decoded; it does not discover venues or infer fills from generic transfers. |
 | PropAMM pairing | A pair proves receipt order in a block, not that an update was the newest off-chain quote or that a builder received it first. |
+| PropAMM venues | Fills decode for FermiSwap and El Zorro; updates for El Zorro, Kipseli, Tempest and bopAMM. Fermi updates go to its unverified pricing engine and are not decoded, so Fermi fills are reported without an update. |
+| PropAMM same-transaction updates | Execution data cannot order an internal update against a log in one transaction. Such an update is flagged (`same_tx_update`) and never paired. |
 | PropAMM update timestamps | Priority Update Registry signed batches carry a maker-selected timestamp. It is retained on decoded update rows but has not yet been used for quote-age or markout analysis. |
 
 ## Quick start
@@ -127,7 +129,8 @@ cargo run -p tembri -- propamm-pair \
   --input data/propamm/events.ndjson \
   --pairs-out data/propamm/pairs.ndjson \
   --blocks-out data/propamm/blocks.ndjson \
-  --builders-out data/propamm/builders.ndjson
+  --builders-out data/propamm/builders.ndjson \
+  --period-blocks data/propamm/period_blocks.ndjson
 ```
 
 ### Project Xatu partitions
@@ -146,14 +149,21 @@ cargo run -p tembri -- propamm-project \
   --period 2026-10-05 \
   --fill-rules data/propamm/fill_rules.ndjson \
   --registry 0xda7afeed021eafc1c1af9c362de477dad0396b81 \
+  --with-traces \
   --logs-out data/propamm/logs.ndjson \
-  --calls-out data/propamm/calls.ndjson
+  --calls-out data/propamm/calls.ndjson \
+  --period-blocks-out data/propamm/period_blocks.ndjson
 ```
 
-Registry updates made through an internal call (for example, from a maker or
-venue contract) are not top-level transactions and are not projected. Until
-trace projection exists, a `propamm_fill_without_update` may reflect this
-coverage gap rather than an unpaired fill.
+Add `--with-traces` (after fetching the `traces` dataset) to include internal
+registry calls: `call` frames to the registry whose frame and ancestors did
+not revert. Reads (`static_call`) and `delegate_call` frames are not updates.
+Without traces, an update made from inside another contract is missed and its
+fill is reported as `propamm_fill_without_update`.
+
+`--period-blocks-out BLOCKS.ndjson` writes every canonical block in the period
+with its builder signal. Pass it to `propamm-pair --period-blocks` to add each
+builder's total blocks, the denominator for its share of blocks.
 
 ### Decode reviewed evidence
 

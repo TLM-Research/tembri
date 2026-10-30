@@ -234,6 +234,10 @@ pub struct PropammCall {
     pub cumulative_gas_before: Gas,
     pub input: String,
     pub builder: Option<String>,
+    /// Trace position of an internal call (for example `0_1`); `None` for the
+    /// transaction's top-level call.
+    #[serde(default)]
+    pub trace_address: Option<String>,
 }
 
 /// A reviewed event rule. `pool` is explicit so a registry update may later be
@@ -293,6 +297,10 @@ pub struct PropammFillPair {
     pub transaction_gap: Option<u32>,
     pub gas_gap: Option<Gas>,
     pub fills_before_next_update: u32,
+    /// An update for this pool is in the fill's own transaction. Execution data
+    /// does not order an internal call against a log, so it is never paired.
+    #[serde(default)]
+    pub same_tx_update: bool,
 }
 
 /// A fill is retained even when no qualifying same-block update is observed.
@@ -317,11 +325,23 @@ pub struct PropammBlockSummary {
     pub fills_without_update: u32,
 }
 
+/// One canonical block in a measurement period with its builder signal; the
+/// denominator for a builder's share of blocks.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropammPeriodBlock {
+    pub block_number: BlockNumber,
+    pub builder: Option<String>,
+}
+
 /// Builder-attribution aggregation. Builder is an execution-data signal until
 /// a verified relay/builder join is available.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PropammBuilderSummary {
     pub builder: Option<String>,
+    /// All canonical blocks this builder signal built in the period, whether
+    /// or not they carry PropAMM activity; `None` when no period was supplied.
+    #[serde(default)]
+    pub period_blocks: Option<u32>,
     pub active_blocks: u32,
     pub updates: u32,
     pub fills: u32,
