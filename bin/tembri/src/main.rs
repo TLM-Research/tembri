@@ -408,7 +408,7 @@ fn propamm_project_cmd(v: Vec<String>) -> ExitCode {
         arg(&v, "--calls-out"),
     ) else {
         eprintln!(
-            "Usage: tembri propamm-project --xatu DIR [--period available|YYYY-MM|YYYY-MM-DD] --fill-rules RULES.ndjson --registry ADDRESS [--with-traces] --logs-out LOGS.ndjson --calls-out CALLS.ndjson [--period-blocks-out BLOCKS.ndjson]"
+            "Usage: tembri propamm-project --xatu DIR [--period available|YYYY-MM|YYYY-MM-DD] --fill-rules RULES.ndjson --registry ADDRESS [--with-traces] --logs-out LOGS.ndjson --calls-out CALLS.ndjson [--period-blocks-out BLOCKS.ndjson] [--reference-out PRICES.ndjson] [--reference-blocks-out CLOSES.ndjson]"
         );
         return ExitCode::from(2);
     };
@@ -444,7 +444,16 @@ fn propamm_project_cmd(v: Vec<String>) -> ExitCode {
         }
     };
     let with_traces = v.iter().any(|flag| flag == "--with-traces");
-    let (logs, calls, period_blocks) = match propamm_project::project_xatu_plan(&plan, &registry, &emitters, with_traces) {
+    let reference_out = arg(&v, "--reference-out");
+    let reference_blocks_out = arg(&v, "--reference-blocks-out");
+    let with_reference = reference_out.is_some() || reference_blocks_out.is_some();
+    let (logs, calls, period_blocks, reference) = match propamm_project::project_xatu_plan(
+        &plan,
+        &registry,
+        &emitters,
+        with_traces,
+        with_reference,
+    ) {
         Ok(rows) => rows,
         Err(error) => {
             eprintln!("PropAMM projection failed: {error}");
@@ -462,6 +471,19 @@ fn propamm_project_cmd(v: Vec<String>) -> ExitCode {
     if let Some(path) = arg(&v, "--period-blocks-out") {
         if let Err(error) = write_ndjson(&path, &period_blocks) {
             eprintln!("cannot write period blocks: {error}");
+            return ExitCode::from(1);
+        }
+    }
+    if let Some(path) = reference_out {
+        if let Err(error) = write_ndjson(&path, &reference) {
+            eprintln!("cannot write reference prices: {error}");
+            return ExitCode::from(1);
+        }
+    }
+    if let Some(path) = reference_blocks_out {
+        let closes = tlm_classify::reference_block_closes(&reference, &period_blocks);
+        if let Err(error) = write_ndjson(&path, &closes) {
+            eprintln!("cannot write reference block prices: {error}");
             return ExitCode::from(1);
         }
     }

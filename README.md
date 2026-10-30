@@ -34,6 +34,7 @@ Tembri is a Rust toolbox for reproducible Ethereum execution and mempool measure
 | PropAMM pairing | A pair proves receipt order in a block, not that an update was the newest off-chain quote or that a builder received it first. |
 | PropAMM venues | Fills decode for FermiSwap, El Zorro and bopAMM; updates for all three plus Kipseli and Tempest. Fermi updates are the pricing engine's event, accepted on BuilderNet's description because the engine is unverified. |
 | PropAMM quote age | Registry venues except Tempest accept only state stamped with the current block's timestamp, so maker-time quote age is 0 by contract. `update_timestamp` is a target block time, not a signing time. |
+| PropAMM reference price | Uniswap V3 USDC/WETH 0.05% post-swap price; a mid only within its 5 bp fee, arbitraged by the same searchers, and carried through the 42% of blocks without a swap (`last_swap_block`). |
 | PropAMM target self-writes | A registry write whose caller is the reviewed target itself (bopAMM inside every fill) is `target_write`, not an update, and is never paired. |
 | PropAMM same-transaction updates | Execution data cannot order an internal update against a log in one transaction. Such an update is flagged (`same_tx_update`) and never paired. |
 | PropAMM update timestamps | Priority Update Registry signed batches carry a maker-selected timestamp. It is retained on decoded update rows but has not yet been used for quote-age or markout analysis. |

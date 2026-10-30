@@ -77,6 +77,9 @@ el_zorro_entrypoint = "0xcf211b4dd0d2be5c173ea57bcf938fc61d1d3bd3"
 # unverified; its update event is enabled on BuilderNet's description
 # (`propamm_fermiswap_update`, pool = fermiswap_entrypoint).
 fermiswap_pricing_engine = "0x0109aa912b58508886a2a707204b0f8c8b164ccc"
+# On-chain reference price (not a PropAMM): Uniswap V3 USDC/WETH 0.05%,
+# token0 USDC, token1 WETH. Reviewed constant in reference_price.rs, 2026-10-30.
+reference_usdc_weth_pool = "0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640"
 metric_entrypoint = "0xe715dc29d2c273d0fc5a03e5cca9ccb0abb1dcdb"
 metric_compressed_oracle = "0xe844701934d9c6085b292e428f41b911cc0b3872"
 metric_pyth_oracle = "0x30a88bf894d1b806125a23ebf23d715496fd7102"

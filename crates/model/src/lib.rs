@@ -362,6 +362,28 @@ pub struct PropammPeriodBlock {
     pub timestamp: Option<u64>,
 }
 
+/// One post-swap price of the reviewed on-chain reference pool.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ReferencePricePoint {
+    pub block_number: BlockNumber,
+    pub tx_position: u32,
+    pub log_index: u32,
+    /// Pool `sqrtPriceX96` after the swap, as emitted (`0x`-prefixed hex).
+    pub sqrt_price_x96: String,
+    /// Quote-token units per base-token unit (USDC per WETH for the reviewed pool).
+    pub price: f64,
+}
+
+/// The reference price at the close of each period block. A block without a
+/// swap carries the latest earlier close; `last_swap_block` says how stale.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ReferenceBlockPrice {
+    pub block_number: BlockNumber,
+    pub close: Option<f64>,
+    pub swaps: u32,
+    pub last_swap_block: Option<BlockNumber>,
+}
+
 /// Builder-attribution aggregation. Builder is an execution-data signal until
 /// a verified relay/builder join is available.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

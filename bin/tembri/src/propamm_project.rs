@@ -17,7 +17,8 @@ use parquet::record::RowAccessor;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use tlm_model::{PropammCall, PropammLog, PropammPeriodBlock};
+use tlm_classify::{decode_reference_swap, REFERENCE_POOL};
+use tlm_model::{PropammCall, PropammLog, PropammPeriodBlock, ReferencePricePoint};
 
 #[derive(Clone, Debug)]
 pub(crate) struct XatuBlockHeader {
@@ -63,6 +64,7 @@ pub(crate) struct XatuLogRow {
     pub log_index: u32,
     pub address: String,
     pub topic0: String,
+    pub data: Option<String>,
 }
 
 /// Project one partition's rows. Every block that contributes a row must have
@@ -268,8 +270,14 @@ fn is_registry_call(tx: &XatuTxRow, registry: &str) -> bool {
     tx.success && to_registry(tx.to.as_deref(), registry)
 }
 
-/// Decoder inputs plus every period block's builder signal.
-pub(crate) type ProjectedPlan = (Vec<PropammLog>, Vec<PropammCall>, Vec<PropammPeriodBlock>);
+/// Decoder inputs, every period block's builder signal, and the reference
+/// pool's price points (empty unless requested).
+pub(crate) type ProjectedPlan = (
+    Vec<PropammLog>,
+    Vec<PropammCall>,
+    Vec<PropammPeriodBlock>,
+    Vec<ReferencePricePoint>,
+);
 
 /// Read and project every partition in the plan, restricted to its blocks.
 pub(crate) fn project_xatu_plan(
@@ -277,7 +285,13 @@ pub(crate) fn project_xatu_plan(
     registry: &str,
     emitters: &BTreeSet<String>,
     with_traces: bool,
+    with_reference: bool,
 ) -> Result<ProjectedPlan, String> {
+    let mut read_emitters = emitters.clone();
+    if with_reference {
+        read_emitters.insert(REFERENCE_POOL.to_string());
+    }
+    let mut reference = Vec::new();
     let mut all_logs = Vec::new();
     let mut all_calls = Vec::new();
     let mut period_blocks = Vec::new();
@@ -297,7 +311,20 @@ pub(crate) fn project_xatu_plan(
             timestamp: Some(header.timestamp),
         }));
         let txs = read_txs(&partition.join("transactions.parquet"), registry, &selected)?;
-        let logs = read_logs(&partition.join("logs.parquet"), emitters, &selected)?;
+        let logs = read_logs(&partition.join("logs.parquet"), &read_emitters, &selected)?;
+        if with_reference {
+            for log in logs.iter().filter(|log| log.address == REFERENCE_POOL) {
+                let point = decode_reference_swap(
+                    log.block_number,
+                    log.tx_index,
+                    log.log_index,
+                    &log.topic0,
+                    log.data.as_deref().unwrap_or("0x"),
+                )
+                .map_err(|error| format!("{}: {error}", partition.display()))?;
+                reference.extend(point);
+            }
+        }
         let traces = if with_traces {
             Some(read_traces(&partition.join("traces.parquet"), registry, &selected)?)
         } else {
@@ -315,7 +342,8 @@ pub(crate) fn project_xatu_plan(
             .cmp(&(right.block_number, right.tx_position, &right.trace_address))
     });
     period_blocks.sort_by_key(|block| block.block_number);
-    Ok((all_logs, all_calls, period_blocks))
+    reference.sort_by_key(|point| (point.block_number, point.tx_position, point.log_index));
+    Ok((all_logs, all_calls, period_blocks, reference))
 }
 
 /// Resolve Xatu columns by name: physical positions differ between schema
@@ -477,13 +505,13 @@ fn read_logs(
     selected: &impl Fn(u64) -> bool,
 ) -> Result<Vec<XatuLogRow>, String> {
     let reader = xatu_reader(path)?;
-    let [number, tx_index, tx_hash, log_index, address, topic0] = columns(
+    let [number, tx_index, tx_hash, log_index, address, topic0, data] = columns(
         &reader,
         path,
-        &["block_number", "transaction_index", "transaction_hash", "log_index", "address", "topic0"],
+        &["block_number", "transaction_index", "transaction_hash", "log_index", "address", "topic0", "data"],
     )?[..]
     else {
-        unreachable!("six columns requested")
+        unreachable!("seven columns requested")
     };
     let mut logs = Vec::new();
     for row in reader.get_row_iter(None).map_err(|e| e.to_string())? {
@@ -505,6 +533,7 @@ fn read_logs(
             log_index: u32::try_from(parquet_u64(&row, log_index)?).map_err(|e| e.to_string())?,
             address: emitter,
             topic0: parquet_text(&row, topic0).unwrap_or_default(),
+            data: parquet_text(&row, data),
         });
     }
     Ok(logs)
@@ -537,6 +566,7 @@ mod tests {
             log_index: 7,
             address: address.into(),
             topic0: "0xTOPIC".into(),
+            data: None,
         }
     }
 

@@ -4,12 +4,17 @@ pub mod activity;
 pub mod fee_fingerprint;
 pub mod lifecycle;
 pub mod propamm;
+pub mod reference_price;
 pub use activity::{
     ActivityFilter, ClassifiedActivity, CompositionCounts, MempoolVisibility, PublicMempoolIndex,
     TipBucket,
 };
 pub use fee_fingerprint::{fingerprint_fee_fields, FeeFingerprint, FeeFingerprintConfig};
 pub use lifecycle::measure_mempool_lifecycle;
+pub use reference_price::{
+    decode_reference_swap, reference_block_closes, reference_mid_before, REFERENCE_POOL,
+    UNISWAP_V3_SWAP_TOPIC,
+};
 pub use propamm::{
     add_period_blocks, add_quote_ages,
     decode_propamm_activity, decode_propamm_log, decode_registry_batch_updates,

@@ -16,6 +16,9 @@
 - Quote age (TODO item 8): period blocks carry `timestamp`; fill rows carry
   `last_update_block`, `blocks_since_update` (across blocks within the
   input), the maker `update_timestamp` and a signed `quote_age_seconds`.
+- On-chain reference price (TODO item 9): `propamm-project --reference-out`
+  and `--reference-blocks-out` write post-swap prices from the Uniswap V3
+  USDC/WETH 0.05% pool and a carried per-block close with `last_swap_block`.
 
 ## Changed
 
@@ -38,11 +41,13 @@
   always pair within the block, by contract rule. Tempest accepts −3 s to
   +12 s. See `adr/2026-10-30-propamm-quote-age.md`.
 - The Fermi rule rests on BuilderNet's description, not on a verified ABI.
+- The reference pool has a swap in only 58% of blocks on 2026-10-05; the
+  rest carry an earlier close. See `adr/2026-10-30-propamm-reference-price.md`.
 
 ## Validation
 
 - On 2026-10-05: every Fermi (1,934), El Zorro (443) and bopAMM (225) fill
   pairs with an earlier same-block update. There are 225 bopAMM self-writes.
 - All 1,148 registry writes on 2026-10-05 carry their own block's timestamp.
-- `cargo test --workspace` (46 tests) and
+- `cargo test --workspace` (50 tests) and
   `cargo clippy --workspace -- -D warnings` pass.
