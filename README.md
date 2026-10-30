@@ -47,7 +47,7 @@ cargo run -p tembri -- --help
 The CLI currently exposes:
 
 ```text
-tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|propamm-bytecode-group|propamm-decode|propamm-pair|mempool-lifecycle|run-period|report>
+tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|propamm-bytecode-group|propamm-project|propamm-decode|propamm-pair|mempool-lifecycle|run-period|report>
 ```
 
 ## Run an execution report
@@ -78,6 +78,12 @@ finally pair the resulting update/fill rows. The output keeps unmatched fills
 instead of silently dropping them.
 
 ```text
+Xatu blocks + transactions + logs
+                 │
+                 ▼
+          propamm-project
+                 │  PropammLog + PropammCall NDJSON
+                 ▼
 PropammLog + PropammCall + reviewed rules
                  │
                  ▼
@@ -124,11 +130,38 @@ cargo run -p tembri -- propamm-pair \
   --builders-out data/propamm/builders.ndjson
 ```
 
+### Project Xatu partitions
+
+`propamm-project` reads the Xatu partitions for a UTC day, month, or all
+available blocks and writes the two decoder inputs. It keeps logs only from
+the emitters named in the reviewed fill rules, and only successful top-level
+transactions to the registry. Columns are resolved by schema name. A block that
+contributes a row must have a header and a complete transaction list whose gas
+sums to the block's `gas_used`; otherwise the command fails rather than emit a
+wrong cumulative-gas position.
+
+```bash
+cargo run -p tembri -- propamm-project \
+  --xatu data/raw/xatu \
+  --period 2026-10-05 \
+  --fill-rules data/propamm/fill_rules.ndjson \
+  --registry 0xda7afeed021eafc1c1af9c362de477dad0396b81 \
+  --logs-out data/propamm/logs.ndjson \
+  --calls-out data/propamm/calls.ndjson
+```
+
+Registry updates made through an internal call (for example, from a maker or
+venue contract) are not top-level transactions and are not projected. Until
+trace projection exists, a `propamm_fill_without_update` may reflect this
+coverage gap rather than an unpaired fill.
+
 ### Decode reviewed evidence
 
 Project execution data into `PropammLog` and `PropammCall` NDJSON, then supply
 only reviewed exact-match fill rules and registry targets. This command emits
 the event input consumed by `propamm-pair`; it rejects ambiguous fill rules.
+For the reviewed registry, it recognizes both the signed-batch update path and
+the verified direct `updateState` path, retaining only allow-listed targets.
 
 ```bash
 cargo run -p tembri -- propamm-decode \

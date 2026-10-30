@@ -11,9 +11,10 @@ pub use activity::{
 pub use fee_fingerprint::{fingerprint_fee_fields, FeeFingerprint, FeeFingerprintConfig};
 pub use lifecycle::measure_mempool_lifecycle;
 pub use propamm::{
-    decode_propamm_activity, decode_propamm_log, decode_registry_batch_updates, pair_propamm_events,
-    group_runtime_bytecode, summarize_propamm_blocks, summarize_propamm_builders,
-    REGISTRY_BATCH_UPDATE_SELECTOR,
+    decode_propamm_activity, decode_propamm_log, decode_registry_batch_updates,
+    decode_registry_direct_update, group_runtime_bytecode, pair_propamm_events,
+    summarize_propamm_blocks, summarize_propamm_builders, REGISTRY_BATCH_UPDATE_SELECTOR,
+    REGISTRY_UPDATE_STATE_SELECTOR,
 };
 
 use tlm_model::{Block, LabelConfig, MempoolSeen, Transaction, TxLabels};

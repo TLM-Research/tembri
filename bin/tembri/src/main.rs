@@ -1,3 +1,5 @@
+mod propamm_project;
+
 use parquet::{
     basic::Type as ParquetPhysicalType,
     file::reader::{FileReader, SerializedFileReader},
@@ -22,13 +24,14 @@ fn main() -> ExitCode {
         Some("classify") => classify(a.collect()),
         Some("metrics") => metrics(a.collect()),
         Some("propamm-bytecode-group") => propamm_bytecode_group(a.collect()),
+        Some("propamm-project") => propamm_project_cmd(a.collect()),
         Some("propamm-decode") => propamm_decode(a.collect()),
         Some("propamm-pair") => propamm_pair(a.collect()),
         Some("mempool-lifecycle") => mempool_lifecycle(a.collect()),
         Some("run-period") => run_period(a.collect()),
         Some("report") => report(a.collect()),
         _ => {
-            println!("Usage: tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|propamm-bytecode-group|propamm-decode|propamm-pair|mempool-lifecycle|run-period|report> ...");
+            println!("Usage: tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|propamm-bytecode-group|propamm-project|propamm-decode|propamm-pair|mempool-lifecycle|run-period|report> ...");
             ExitCode::from(2)
         }
     }
@@ -392,6 +395,76 @@ fn propamm_bytecode_group(v: Vec<String>) -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+fn propamm_project_cmd(v: Vec<String>) -> ExitCode {
+    let (Some(xatu), Some(fill_rules_path), Some(registry), Some(logs_out), Some(calls_out)) = (
+        arg(&v, "--xatu"),
+        arg(&v, "--fill-rules"),
+        v.windows(2)
+            .find(|window| window[0] == "--registry")
+            .map(|window| window[1].to_ascii_lowercase()),
+        arg(&v, "--logs-out"),
+        arg(&v, "--calls-out"),
+    ) else {
+        eprintln!(
+            "Usage: tembri propamm-project --xatu DIR [--period available|YYYY-MM|YYYY-MM-DD] --fill-rules RULES.ndjson --registry ADDRESS --logs-out LOGS.ndjson --calls-out CALLS.ndjson"
+        );
+        return ExitCode::from(2);
+    };
+    let period = match tlm_report::ReportPeriod::parse(
+        v.windows(2)
+            .find(|window| window[0] == "--period")
+            .map(|window| window[1].as_str())
+            .unwrap_or("available"),
+    ) {
+        Ok(period) => period,
+        Err(error) => {
+            eprintln!("invalid period: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let rules = match read_ndjson::<tlm_model::PropammEventRule>(&fill_rules_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid PropAMM fill-rule input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let emitters = rules
+        .iter()
+        .map(|rule| rule.emitter.to_ascii_lowercase())
+        .collect();
+    let config = tlm_report::ReportConfig::activity_tip(&xatu, ".", period);
+    let plan = match tlm_report::plan(&config) {
+        Ok(plan) => plan,
+        Err(error) => {
+            eprintln!("PropAMM projection plan failed: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let (logs, calls) = match propamm_project::project_xatu_plan(&plan, &registry, &emitters) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("PropAMM projection failed: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    if let Err(error) = write_ndjson(&logs_out, &logs) {
+        eprintln!("cannot write PropAMM logs: {error}");
+        return ExitCode::from(1);
+    }
+    if let Err(error) = write_ndjson(&calls_out, &calls) {
+        eprintln!("cannot write PropAMM calls: {error}");
+        return ExitCode::from(1);
+    }
+    println!(
+        "wrote {} PropAMM log rows and {} registry call rows for {}",
+        logs.len(),
+        calls.len(),
+        plan.label
+    );
+    ExitCode::SUCCESS
 }
 
 fn propamm_decode(v: Vec<String>) -> ExitCode {

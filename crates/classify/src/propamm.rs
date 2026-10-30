@@ -4,7 +4,7 @@
 //! most recent update for the same pool earlier in the same block. It proves
 //! receipt order, not quote freshness or an off-chain builder receipt time.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use tiny_keccak::{Hasher, Keccak};
 use tlm_model::{
     BytecodeGroup, BytecodeRow, PropammBlockSummary, PropammBuilderSummary, PropammCall,
@@ -14,6 +14,8 @@ use tlm_model::{
 
 /// Selector for `batchUpdateStateWithSignature((address,address,uint256,uint32,uint256[],bytes)[])`.
 pub const REGISTRY_BATCH_UPDATE_SELECTOR: &str = "0xe50de8ea";
+/// Selector for `updateState(address,uint256,uint32,uint256[])`.
+pub const REGISTRY_UPDATE_STATE_SELECTOR: &str = "0xa9114b0f";
 
 /// Group contracts by the Keccak-256 hash of their exact runtime bytecode.
 pub fn group_runtime_bytecode(rows: &[BytecodeRow]) -> Result<Vec<BytecodeGroup>, String> {
@@ -104,6 +106,55 @@ pub fn decode_registry_batch_updates(
     Ok(events)
 }
 
+/// Decode the registry's verified direct-update calldata.
+///
+/// `laneIndex` and slots are validated for ABI shape but are not P0 join keys.
+/// The target and maker-selected `updateTimestamp` identify the reviewed update.
+pub fn decode_registry_direct_update(
+    call: &PropammCall,
+    registry: &str,
+    targets: &[PropammRegistryTarget],
+) -> Result<Vec<PropammEvent>, String> {
+    if !call.to.eq_ignore_ascii_case(registry)
+        || !call
+            .input
+            .get(..10)
+            .is_some_and(|selector| selector.eq_ignore_ascii_case(REGISTRY_UPDATE_STATE_SELECTOR))
+    {
+        return Ok(Vec::new());
+    }
+    let bytes = hex_bytes(&call.input[10..])?;
+    let target = abi_address(&bytes, 0)?;
+    let timestamp = abi_u32(&bytes, 64)?;
+    let slots_offset = abi_usize(&bytes, 96)?;
+    let slots_len = abi_usize(&bytes, slots_offset)?;
+    if slots_len == 0 {
+        return Err("registry direct update has no slots".into());
+    }
+    let last_slot = slots_offset
+        .checked_add(32)
+        .and_then(|offset| slots_len.checked_sub(1).and_then(|last| last.checked_mul(32).and_then(|last| offset.checked_add(last))))
+        .ok_or("registry direct update slots overflow")?;
+    abi_word(&bytes, last_slot)?;
+    let Some(label) = targets
+        .iter()
+        .find(|label| label.target.eq_ignore_ascii_case(&target))
+    else {
+        return Ok(Vec::new());
+    };
+    Ok(vec![PropammEvent {
+        block_number: call.block_number,
+        pool: label.pool.clone(),
+        venue: label.venue.clone(),
+        builder: call.builder.clone(),
+        tx_hash: call.tx_hash.clone(),
+        tx_position: call.tx_position,
+        cumulative_gas_before: call.cumulative_gas_before,
+        update_timestamp: Some(timestamp.into()),
+        kind: PropammEventKind::Update,
+    }])
+}
+
 /// Decode all reviewed PropAMM evidence from one execution-data slice.
 ///
 /// A log must match exactly one fill rule. Rejecting overlapping rules avoids
@@ -134,6 +185,11 @@ pub fn decode_propamm_activity(
     }
     for call in calls {
         events.extend(decode_registry_batch_updates(
+            call,
+            registry,
+            registry_targets,
+        )?);
+        events.extend(decode_registry_direct_update(
             call,
             registry,
             registry_targets,
@@ -343,10 +399,14 @@ pub fn summarize_propamm_blocks(
 }
 
 /// Aggregate decoded PropAMM activity by the supplied builder signal.
+///
+/// Block summaries are per `(block, pool)`, so `active_blocks` counts distinct
+/// block numbers: a block with activity on two pools is one active block.
 pub fn summarize_propamm_builders(
     blocks: &[PropammBlockSummary],
 ) -> Vec<PropammBuilderSummary> {
     let mut rows: BTreeMap<Option<String>, PropammBuilderSummary> = BTreeMap::new();
+    let mut seen_blocks: BTreeSet<(Option<String>, u64)> = BTreeSet::new();
     for block in blocks {
         let row = rows
             .entry(block.builder.clone())
@@ -358,7 +418,9 @@ pub fn summarize_propamm_builders(
                 paired_fills: 0,
                 fills_without_update: 0,
             });
-        row.active_blocks = row.active_blocks.saturating_add(1);
+        if seen_blocks.insert((block.builder.clone(), block.block_number)) {
+            row.active_blocks = row.active_blocks.saturating_add(1);
+        }
         row.updates = row.updates.saturating_add(block.updates);
         row.fills = row.fills.saturating_add(block.fills);
         row.paired_fills = row.paired_fills.saturating_add(block.paired_fills);
@@ -453,6 +515,38 @@ mod tests {
     }
 
     #[test]
+    fn decodes_reviewed_registry_target_from_direct_update() {
+        let address_word = |address: &str| format!("{:0>64}", address.trim_start_matches("0x"));
+        let number_word = |number: u64| format!("{number:064x}");
+        let call = PropammCall {
+            block_number: 10,
+            to: "0xregistry".into(),
+            tx_hash: "0xupdate".into(),
+            tx_position: 1,
+            cumulative_gas_before: 10,
+            input: format!(
+                "{REGISTRY_UPDATE_STATE_SELECTOR}{}{}{}{}{}{}",
+                address_word("0x00000000000000000000000000000000000000aa"),
+                number_word(7),
+                number_word(1_700_000_000),
+                number_word(128),
+                number_word(1),
+                number_word(42),
+            ),
+            builder: Some("titan".into()),
+        };
+        let targets = [PropammRegistryTarget {
+            target: "0x00000000000000000000000000000000000000aa".into(),
+            venue: "tempest".into(),
+            pool: "0xpool".into(),
+        }];
+        let updates = decode_registry_direct_update(&call, "0xREGISTRY", &targets).unwrap();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].kind, PropammEventKind::Update);
+        assert_eq!(updates[0].update_timestamp, Some(1_700_000_000));
+    }
+
+    #[test]
     fn registry_decoder_rejects_wrong_selector_and_unreviewed_target() {
         let call = PropammCall {
             block_number: 10,
@@ -466,6 +560,64 @@ mod tests {
         assert!(decode_registry_batch_updates(&call, "0xregistry", &[])
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn golden_block_26293512_keeps_fermi_fill_unmatched() {
+        // Receipt-grounded negative control, collected from Ethereum mainnet
+        // block 26293512 (0x1913508). The registry call at transaction 99 is
+        // a verified direct update for Tempest, while the reviewed Fermi fill
+        // is transaction 134. It must not be inferred as an update for the
+        // Fermi entrypoint merely because it appears earlier in the block.
+        let calls = [PropammCall {
+            block_number: 26_293_512,
+            to: "0xda7afeed021eafc1c1af9c362de477dad0396b81".into(),
+            tx_hash: "0xbb67d28c481b8ccd50704d59541e5db4191d87027b2a6670d1414b521041f03c"
+                .into(),
+            tx_position: 99,
+            cumulative_gas_before: 0,
+            input: "0xa9114b0f00000000000000000000000000000003f1ec2379e79f58e12ec6c4f51ee921492b2f5776e38002e0c013d0d89828fdb06fee595ea2d5ed4b194e3883e823e350000000000000000000000000000000000000000000000000000000006ae255b3000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000020000000000000000d00cf6847000870cf1df6000480cad41c000008da701af820000018b0df5caf001510dacf130011e0d5625a000fe0d2991b800e60d1f0750".into(),
+            builder: Some("buildernet".into()),
+        }];
+        let logs = [PropammLog {
+            block_number: 26_293_512,
+            emitter: "0x5979458912f80b96d30d4220af8e2e4925a33320".into(),
+            tx_hash: "0xef4be765b989ccb393fd5a33dcdc68facf8a8497092a5c5c127c511faf710f66"
+                .into(),
+            tx_position: 134,
+            cumulative_gas_before: 0,
+            log_index: 250,
+            topic0: "0x1eeaa4acf3c225a4033105c2647625dbb298dec93b14e16253c4231e26c02b1d"
+                .into(),
+            builder: Some("buildernet".into()),
+        }];
+        let events = decode_propamm_activity(
+            &logs,
+            &calls,
+            &[PropammEventRule {
+                emitter: "0x5979458912f80b96d30d4220af8e2e4925a33320".into(),
+                topic0: "0x1eeaa4acf3c225a4033105c2647625dbb298dec93b14e16253c4231e26c02b1d"
+                    .into(),
+                venue: "fermiswap".into(),
+                pool: "0x5979458912f80b96d30d4220af8e2e4925a33320".into(),
+                kind: PropammEventKind::Fill,
+            }],
+            "0xda7afeed021eafc1c1af9c362de477dad0396b81",
+            &[PropammRegistryTarget {
+                target: "0x00000003f1ec2379e79f58e12ec6c4f51ee92149".into(),
+                venue: "tempest".into(),
+                pool: "0x00000003f1ec2379e79f58e12ec6c4f51ee92149".into(),
+            }],
+        )
+        .unwrap();
+        let pairs = pair_propamm_events(&events);
+        assert_eq!(events.len(), 2);
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(
+            pairs[0].result,
+            PropammPairingResult::PropammFillWithoutUpdate
+        );
+        assert_eq!(pairs[0].update_tx_hash, None);
     }
 
     #[test]
@@ -656,5 +808,32 @@ mod tests {
         assert_eq!(builders[0].fills_without_update, 1);
         assert_eq!(builders[1].builder.as_deref(), Some("titan"));
         assert_eq!(builders[1].paired_fills, 1);
+    }
+
+    #[test]
+    fn counts_a_block_with_two_active_pools_as_one_builder_block() {
+        let mut second_pool_update = event(3, 30, PropammEventKind::Update);
+        second_pool_update.pool = "0xother".into();
+        let mut second_pool_fill = event(4, 40, PropammEventKind::Fill);
+        second_pool_fill.pool = "0xother".into();
+        let mut next_block_fill = event(1, 5, PropammEventKind::Fill);
+        next_block_fill.block_number = 11;
+        let events = vec![
+            event(1, 10, PropammEventKind::Update),
+            event(2, 20, PropammEventKind::Fill),
+            second_pool_update,
+            second_pool_fill,
+            next_block_fill,
+        ];
+        let pairs = pair_propamm_events(&events);
+        let blocks = summarize_propamm_blocks(&events, &pairs);
+        assert_eq!(blocks.len(), 3);
+
+        let builders = summarize_propamm_builders(&blocks);
+        assert_eq!(builders.len(), 1);
+        assert_eq!(builders[0].active_blocks, 2);
+        assert_eq!(builders[0].fills, 3);
+        assert_eq!(builders[0].paired_fills, 2);
+        assert_eq!(builders[0].fills_without_update, 1);
     }
 }
