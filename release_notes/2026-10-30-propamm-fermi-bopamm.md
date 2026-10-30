@@ -13,6 +13,9 @@
 - `target_write` events and `target_writes` in block summaries: registry
   writes made by the reviewed target itself, as bopAMM does inside every fill.
 - Golden block 26122767: two bopAMM fills on one signed batch update.
+- Quote age (TODO item 8): period blocks carry `timestamp`; fill rows carry
+  `last_update_block`, `blocks_since_update` (across blocks within the
+  input), the maker `update_timestamp` and a signed `quote_age_seconds`.
 
 ## Changed
 
@@ -30,11 +33,16 @@
 ## Boundaries
 
 - Fermi updates carry no maker timestamp.
+- El Zorro, Kipseli and bopAMM read registry state only if it is stamped
+  with the current block's timestamp, so their quote age is 0 s and they
+  always pair within the block, by contract rule. Tempest accepts −3 s to
+  +12 s. See `adr/2026-10-30-propamm-quote-age.md`.
 - The Fermi rule rests on BuilderNet's description, not on a verified ABI.
 
 ## Validation
 
 - On 2026-10-05: every Fermi (1,934), El Zorro (443) and bopAMM (225) fill
   pairs with an earlier same-block update. There are 225 bopAMM self-writes.
-- `cargo test --workspace` (43 tests) and
+- All 1,148 registry writes on 2026-10-05 carry their own block's timestamp.
+- `cargo test --workspace` (46 tests) and
   `cargo clippy --workspace -- -D warnings` pass.

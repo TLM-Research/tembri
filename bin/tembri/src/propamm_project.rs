@@ -23,6 +23,8 @@ use tlm_model::{PropammCall, PropammLog, PropammPeriodBlock};
 pub(crate) struct XatuBlockHeader {
     pub gas_used: u64,
     pub builder: Option<String>,
+    /// Unix seconds.
+    pub timestamp: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -292,6 +294,7 @@ pub(crate) fn project_xatu_plan(
         period_blocks.extend(headers.iter().map(|(block_number, header)| PropammPeriodBlock {
             block_number: *block_number,
             builder: header.builder.clone(),
+            timestamp: Some(header.timestamp),
         }));
         let txs = read_txs(&partition.join("transactions.parquet"), registry, &selected)?;
         let logs = read_logs(&partition.join("logs.parquet"), emitters, &selected)?;
@@ -336,9 +339,10 @@ fn read_headers(
     selected: &impl Fn(u64) -> bool,
 ) -> Result<HashMap<u64, XatuBlockHeader>, String> {
     let reader = xatu_reader(path)?;
-    let [number, gas_used, extra_data] = columns(&reader, path, &["block_number", "gas_used", "extra_data"])?[..]
+    let [number, gas_used, extra_data, date_time] =
+        columns(&reader, path, &["block_number", "gas_used", "extra_data", "block_date_time"])?[..]
     else {
-        unreachable!("three columns requested")
+        unreachable!("four columns requested")
     };
     let mut headers = HashMap::new();
     for row in reader.get_row_iter(None).map_err(|e| e.to_string())? {
@@ -350,11 +354,19 @@ fn read_headers(
                 XatuBlockHeader {
                     gas_used: parquet_u64(&row, gas_used)?,
                     builder: parquet_text(&row, extra_data).map(builder_name),
+                    timestamp: block_timestamp(&row, date_time)?,
                 },
             );
         }
     }
     Ok(headers)
+}
+
+/// Xatu stores `block_date_time` as a UTC millisecond timestamp; Ethereum
+/// block times are whole seconds.
+fn block_timestamp(row: &parquet::record::Row, col: usize) -> Result<u64, String> {
+    let millis = row.get_timestamp_millis(col).map_err(|e| format!("block_date_time: {e}"))?;
+    u64::try_from(millis / 1000).map_err(|_| "block_date_time is before 1970".into())
 }
 
 fn read_txs(
@@ -534,6 +546,7 @@ mod tests {
             XatuBlockHeader {
                 gas_used,
                 builder: Some("titan".into()),
+                timestamp: 0,
             },
         )])
     }

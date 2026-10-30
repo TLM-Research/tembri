@@ -558,7 +558,7 @@ fn propamm_pair(v: Vec<String>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let pairs = tlm_classify::pair_propamm_events(&events);
+    let mut pairs = tlm_classify::pair_propamm_events(&events);
     let blocks = tlm_classify::summarize_propamm_blocks(&events, &pairs);
     let mut builders = tlm_classify::summarize_propamm_builders(&blocks);
     if let Some(path) = arg(&v, "--period-blocks") {
@@ -573,6 +573,13 @@ fn propamm_pair(v: Vec<String>) -> ExitCode {
             Ok(rows) => rows,
             Err(error) => {
                 eprintln!("PropAMM builder summary failed: {error}");
+                return ExitCode::from(2);
+            }
+        };
+        pairs = match tlm_classify::add_quote_ages(&pairs, &period) {
+            Ok(rows) => rows,
+            Err(error) => {
+                eprintln!("PropAMM quote age failed: {error}");
                 return ExitCode::from(2);
             }
         };

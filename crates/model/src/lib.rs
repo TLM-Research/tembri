@@ -308,6 +308,23 @@ pub struct PropammFillPair {
     /// does not order an internal call against a log, so it is never paired.
     #[serde(default)]
     pub same_tx_update: bool,
+    /// Block of the latest update for this pool in an earlier transaction,
+    /// carried across blocks within the input. `None` when no such update is
+    /// in the input, which near the start of a period is censoring, not
+    /// evidence that the pool had no update.
+    #[serde(default)]
+    pub last_update_block: Option<BlockNumber>,
+    /// `block_number - last_update_block`; zero for a same-block pair.
+    #[serde(default)]
+    pub blocks_since_update: Option<u64>,
+    /// Maker-supplied timestamp of that update (registry updates only). It is
+    /// not a builder-receipt time.
+    #[serde(default)]
+    pub update_timestamp: Option<u64>,
+    /// Fill block timestamp minus `update_timestamp`, in seconds. Signed: a
+    /// maker clock may run ahead of block time.
+    #[serde(default)]
+    pub quote_age_seconds: Option<i64>,
 }
 
 /// A fill is retained even when no qualifying same-block update is observed.
@@ -340,6 +357,9 @@ pub struct PropammBlockSummary {
 pub struct PropammPeriodBlock {
     pub block_number: BlockNumber,
     pub builder: Option<String>,
+    /// Block timestamp in Unix seconds.
+    #[serde(default)]
+    pub timestamp: Option<u64>,
 }
 
 /// Builder-attribution aggregation. Builder is an execution-data signal until

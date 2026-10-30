@@ -298,7 +298,9 @@ pub fn decode_propamm_log(log: &PropammLog, rule: &PropammEventRule) -> Option<P
 ///
 /// Each fill produces exactly one result. A result without `update_tx_hash` is
 /// the explicit `propamm_fill_without_update` case: there was no earlier,
-/// same-pool update in the block.
+/// same-pool update in the block. Every result also names the latest earlier
+/// update for its pool anywhere in the input (`last_update_block`), so a fill
+/// without a same-block update still has a block distance to its last update.
 pub fn pair_propamm_events(events: &[PropammEvent]) -> Vec<PropammFillPair> {
     let mut groups: BTreeMap<(u64, String), Vec<&PropammEvent>> = BTreeMap::new();
     for event in events {
@@ -309,7 +311,10 @@ pub fn pair_propamm_events(events: &[PropammEvent]) -> Vec<PropammFillPair> {
     }
 
     let mut pairs = Vec::new();
-    for (_, mut group) in groups {
+    // Groups iterate in block order, so this holds each pool's latest update
+    // from earlier blocks.
+    let mut last_update: BTreeMap<String, &PropammEvent> = BTreeMap::new();
+    for ((_, pool), mut group) in groups {
         group.sort_by(|left, right| {
             left.tx_position
                 .cmp(&right.tx_position)
@@ -341,6 +346,7 @@ pub fn pair_propamm_events(events: &[PropammEvent]) -> Vec<PropammFillPair> {
                 PropammEventKind::TargetWrite => {}
                 PropammEventKind::Fill => {
                     fills_since_update = fills_since_update.saturating_add(1);
+                    let latest = prior.or_else(|| last_update.get(&pool).copied());
                     let (update_tx_hash, update_tx_position, transaction_gap, gas_gap) =
                         match prior {
                             Some(update) => (
@@ -373,9 +379,17 @@ pub fn pair_propamm_events(events: &[PropammEvent]) -> Vec<PropammFillPair> {
                         gas_gap,
                         fills_before_next_update: fills_since_update,
                         same_tx_update: in_tx.is_some(),
+                        last_update_block: latest.map(|update| update.block_number),
+                        blocks_since_update: latest
+                            .map(|update| event.block_number - update.block_number),
+                        update_timestamp: latest.and_then(|update| update.update_timestamp),
+                        quote_age_seconds: None,
                     });
                 }
             }
+        }
+        if let Some(update) = in_tx.or(prior) {
+            last_update.insert(pool, update);
         }
     }
     pairs.sort_by(|left, right| {
@@ -386,6 +400,32 @@ pub fn pair_propamm_events(events: &[PropammEvent]) -> Vec<PropammFillPair> {
             .then_with(|| left.fill_tx_hash.cmp(&right.fill_tx_hash))
     });
     pairs
+}
+
+/// Set `quote_age_seconds` from the fill block's timestamp and the update's
+/// maker-supplied timestamp. A fill block missing from `period` is an error;
+/// a period block without a timestamp leaves the age unset.
+pub fn add_quote_ages(
+    pairs: &[PropammFillPair],
+    period: &[PropammPeriodBlock],
+) -> Result<Vec<PropammFillPair>, String> {
+    let times: BTreeMap<u64, Option<u64>> = period
+        .iter()
+        .map(|block| (block.block_number, block.timestamp))
+        .collect();
+    pairs
+        .iter()
+        .map(|pair| {
+            let block_time = times.get(&pair.block_number).ok_or_else(|| {
+                format!("PropAMM fill block {} is not in the supplied period blocks", pair.block_number)
+            })?;
+            let mut pair = pair.clone();
+            pair.quote_age_seconds = block_time
+                .zip(pair.update_timestamp)
+                .map(|(block, maker)| block as i64 - maker as i64);
+            Ok(pair)
+        })
+        .collect()
 }
 
 /// Summarize decoded activity and pairing results per block and pool.
@@ -1141,9 +1181,9 @@ mod tests {
         let blocks = summarize_propamm_blocks(&events, &pairs);
         let builders = summarize_propamm_builders(&blocks);
         let period = [
-            PropammPeriodBlock { block_number: 10, builder: Some("titan".into()) },
-            PropammPeriodBlock { block_number: 11, builder: Some("titan".into()) },
-            PropammPeriodBlock { block_number: 12, builder: Some("other".into()) },
+            PropammPeriodBlock { block_number: 10, builder: Some("titan".into()), timestamp: None },
+            PropammPeriodBlock { block_number: 11, builder: Some("titan".into()), timestamp: None },
+            PropammPeriodBlock { block_number: 12, builder: Some("other".into()), timestamp: None },
         ];
         let rows = add_period_blocks(&builders, &period, &blocks).unwrap();
         assert_eq!(rows.len(), 2);
@@ -1182,5 +1222,68 @@ mod tests {
         assert_eq!(builders[0].fills, 3);
         assert_eq!(builders[0].paired_fills, 2);
         assert_eq!(builders[0].fills_without_update, 1);
+    }
+
+    #[test]
+    fn carries_the_latest_update_across_blocks_for_fills_without_a_same_block_update() {
+        let mut update = event(1, 10, PropammEventKind::Update);
+        update.update_timestamp = Some(1_000);
+        let paired = event(2, 20, PropammEventKind::Fill);
+        let mut later = event(4, 40, PropammEventKind::Fill);
+        later.block_number = 12;
+        let mut other_pool = event(1, 5, PropammEventKind::Fill);
+        other_pool.block_number = 12;
+        other_pool.pool = "0xother".into();
+        let pairs = pair_propamm_events(&[update, paired, later, other_pool]);
+        let found: Vec<_> = pairs
+            .iter()
+            .map(|pair| {
+                (
+                    pair.block_number,
+                    pair.pool.as_str(),
+                    pair.update_tx_position,
+                    pair.last_update_block,
+                    pair.blocks_since_update,
+                    pair.update_timestamp,
+                )
+            })
+            .collect();
+        assert_eq!(
+            found,
+            [
+                (10, "0xpool", Some(1), Some(10), Some(0), Some(1_000)),
+                (12, "0xother", None, None, None, None),
+                (12, "0xpool", None, Some(10), Some(2), Some(1_000)),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_same_transaction_update_counts_as_the_latest_update_for_later_blocks() {
+        let update = event(5, 50, PropammEventKind::Update);
+        let fill = event(5, 50, PropammEventKind::Fill);
+        let mut later = event(1, 5, PropammEventKind::Fill);
+        later.block_number = 11;
+        let pairs = pair_propamm_events(&[update, fill, later]);
+        assert_eq!((pairs[0].update_tx_position, pairs[0].last_update_block), (None, None));
+        assert_eq!((pairs[1].last_update_block, pairs[1].blocks_since_update), (Some(10), Some(1)));
+    }
+
+    #[test]
+    fn quote_age_is_block_time_minus_maker_time_and_may_be_negative() {
+        let mut update = event(1, 10, PropammEventKind::Update);
+        update.update_timestamp = Some(1_000);
+        let mut fermi_update = event(3, 30, PropammEventKind::Update);
+        fermi_update.pool = "0xfermi".into();
+        let mut fermi_fill = event(4, 40, PropammEventKind::Fill);
+        fermi_fill.pool = "0xfermi".into();
+        let pairs = pair_propamm_events(&[update, event(2, 20, PropammEventKind::Fill), fermi_update, fermi_fill]);
+        let period = |timestamp| [PropammPeriodBlock { block_number: 10, builder: None, timestamp }];
+        let aged = add_quote_ages(&pairs, &period(Some(1_012))).unwrap();
+        let ages: Vec<_> = aged.iter().map(|pair| (pair.pool.as_str(), pair.quote_age_seconds)).collect();
+        assert_eq!(ages, [("0xfermi", None), ("0xpool", Some(12))]);
+        assert_eq!(add_quote_ages(&pairs, &period(Some(990))).unwrap()[1].quote_age_seconds, Some(-10));
+        assert_eq!(add_quote_ages(&pairs, &period(None)).unwrap()[1].quote_age_seconds, None);
+        assert!(add_quote_ages(&pairs, &[]).is_err());
     }
 }
