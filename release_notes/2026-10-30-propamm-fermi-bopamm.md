@@ -35,6 +35,14 @@
   Goliath, Park and the legacy bopAMM, each checked against token transfers.
   See `adr/2026-10-30-propamm-more-venues-and-month.md`, which also records
   30 days of CEX markouts across all nine venues.
+- Routes (TODO item 12): `tembri propamm-routes` labels each PropAMM
+  transaction public or not by its Mempool Dumpster first sighting, and
+  writes same-pool sandwiches.
+- Reviewed fill rules and registry targets committed as
+  `config/propamm_fill_rules.ndjson` and
+  `config/propamm_registry_targets.ndjson`.
+- 17 golden-block fixtures (20 golden blocks in all, every venue covered),
+  checked by an integration test against the committed rules.
 
 ## Changed
 
@@ -77,5 +85,10 @@
 - On 2026-10-05: every Fermi (1,934), El Zorro (443) and bopAMM (225) fill
   pairs with an earlier same-block update. There are 225 bopAMM self-writes.
 - All 1,148 registry writes on 2026-10-05 carry their own block's timestamp.
-- `cargo test --workspace` (56 tests) and
+- Over 2026-09-10 to 2026-10-09: 97.1% of 92,627 fills were never seen in
+  the public archive; no fill was sandwiched on its PropAMM pool; Titan
+  carried 67.5% of fills on 49.7% of blocks. Every block's base fee follows
+  from its parent's. See
+  `adr/2026-10-30-propamm-routes-golden-blocks-builders.md`.
+- `cargo test --workspace` (59 tests) and
   `cargo clippy --workspace -- -D warnings` pass.

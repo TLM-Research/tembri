@@ -480,6 +480,50 @@ pub struct PropammTxEnvelope {
     pub max_priority_fee_per_gas: Option<u64>,
 }
 
+/// How a PropAMM transaction reached its block, as far as a public-mempool
+/// archive can tell. The archive's first sighting is compared with the block
+/// timestamp (the slot start).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum PropammRoute {
+    /// First seen publicly before the block timestamp.
+    PublicBeforeBlock,
+    /// First seen publicly at or after the block timestamp: visible only
+    /// once the block was being or had been proposed.
+    SeenAfterBlockTimestamp,
+    /// Never seen by the archive.
+    NotSeenPublic,
+}
+
+/// The route of one transaction with a reviewed PropAMM log.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropammTxRoute {
+    pub block_number: BlockNumber,
+    pub tx_hash: String,
+    pub tx_position: u32,
+    pub route: PropammRoute,
+    /// Archive first-seen time, Unix milliseconds.
+    pub first_seen_ms: Option<u64>,
+    /// Block timestamp in milliseconds minus `first_seen_ms`; positive when
+    /// seen before the slot start.
+    pub lead_ms: Option<i64>,
+}
+
+/// A fill bracketed on the same pool and block by two fills of one other
+/// signer: the front in the victim's direction, the back reversed.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropammSandwich {
+    pub block_number: BlockNumber,
+    pub pool: String,
+    pub venue: String,
+    pub victim_tx_hash: String,
+    pub victim_log_index: u32,
+    pub front_tx_hash: String,
+    pub back_tx_hash: String,
+    /// Signer of the front and back transactions.
+    pub attacker: String,
+}
+
 /// A reviewed address that identifies a taker's order-flow channel.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PropammTakerLabel {

@@ -7,7 +7,7 @@ use parquet::{
 };
 use serde_json::{json, Value};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::{self, File},
     io::{BufRead, BufReader, Write},
     path::PathBuf,
@@ -30,11 +30,12 @@ fn main() -> ExitCode {
         Some("propamm-markouts") => propamm_markouts(a.collect()),
         Some("propamm-cex-markouts") => propamm_cex_markouts(a.collect()),
         Some("propamm-takers") => propamm_takers(a.collect()),
+        Some("propamm-routes") => propamm_routes(a.collect()),
         Some("mempool-lifecycle") => mempool_lifecycle(a.collect()),
         Some("run-period") => run_period(a.collect()),
         Some("report") => report(a.collect()),
         _ => {
-            println!("Usage: tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|propamm-bytecode-group|propamm-project|propamm-decode|propamm-pair|propamm-markouts|propamm-cex-markouts|propamm-takers|mempool-lifecycle|run-period|report> ...");
+            println!("Usage: tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|propamm-bytecode-group|propamm-project|propamm-decode|propamm-pair|propamm-markouts|propamm-cex-markouts|propamm-takers|propamm-routes|mempool-lifecycle|run-period|report> ...");
             ExitCode::from(2)
         }
     }
@@ -757,6 +758,113 @@ fn propamm_takers(v: Vec<String>) -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+fn propamm_routes(v: Vec<String>) -> ExitCode {
+    let (Some(events_path), Some(txs_path), Some(period_path), Some(mempool), Some(out), Some(sandwiches_out)) = (
+        arg(&v, "--events"),
+        arg(&v, "--txs"),
+        arg(&v, "--period-blocks"),
+        v.windows(2).find(|x| x[0] == "--mempool").map(|x| x[1].clone()),
+        arg(&v, "--out"),
+        arg(&v, "--sandwiches-out"),
+    ) else {
+        eprintln!(
+            "Usage: tembri propamm-routes --events EVENTS.ndjson --txs TXS.ndjson --period-blocks BLOCKS.ndjson --mempool DUMPSTER.parquet[,DUMPSTER.parquet] --out ROUTES.ndjson --sandwiches-out SANDWICHES.ndjson"
+        );
+        return ExitCode::from(2);
+    };
+    let events = match read_ndjson::<tlm_model::PropammEvent>(&events_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid PropAMM event input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let txs = match read_ndjson::<tlm_model::PropammTxEnvelope>(&txs_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid PropAMM transaction input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let period = match read_ndjson::<tlm_model::PropammPeriodBlock>(&period_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid period block input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let wanted: HashSet<String> = txs.iter().map(|tx| tx.tx_hash.to_ascii_lowercase()).collect();
+    let mut first_seen = HashMap::new();
+    for path in mempool.split(',').filter(|path| !path.is_empty()) {
+        if let Err(error) = read_dumpster_first_seen(&PathBuf::from(path), &wanted, &mut first_seen) {
+            eprintln!("cannot read Mempool Dumpster file {path}: {error}");
+            return ExitCode::from(1);
+        }
+    }
+    let routes = match tlm_classify::classify_propamm_routes(&txs, &period, &first_seen) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("PropAMM route classification failed: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let sandwiches = match tlm_classify::find_propamm_sandwiches(&events, &txs) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("PropAMM sandwich search failed: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    for (path, result) in [(&out, write_ndjson(&out, &routes)), (&sandwiches_out, write_ndjson(&sandwiches_out, &sandwiches))] {
+        if let Err(error) = result {
+            eprintln!("cannot write {}: {error}", path.display());
+            return ExitCode::from(1);
+        }
+    }
+    println!("wrote {} PropAMM transaction routes and {} sandwiches", routes.len(), sandwiches.len());
+    ExitCode::SUCCESS
+}
+
+/// Read the earliest `timestamp` (Unix milliseconds) of each wanted `hash`
+/// from a Flashbots Mempool Dumpster daily Parquet file, by column name.
+fn read_dumpster_first_seen(
+    path: &PathBuf,
+    wanted: &HashSet<String>,
+    first_seen: &mut HashMap<String, u64>,
+) -> Result<(), String> {
+    let reader = xatu_reader(path)?;
+    let root = reader.metadata().file_metadata().schema();
+    let fields: Vec<_> = root
+        .get_fields()
+        .iter()
+        .filter(|field| matches!(field.name(), "hash" | "timestamp"))
+        .cloned()
+        .collect();
+    let hash = fields.iter().position(|field| field.name() == "hash").ok_or("missing column hash")?;
+    let timestamp = fields
+        .iter()
+        .position(|field| field.name() == "timestamp")
+        .ok_or("missing column timestamp")?;
+    let projection = parquet::schema::types::Type::group_type_builder(root.name())
+        .with_fields(fields)
+        .build()
+        .map_err(|e| e.to_string())?;
+    for row in reader.get_row_iter(Some(projection)).map_err(|e| e.to_string())? {
+        let row = row.map_err(|e| e.to_string())?;
+        let tx_hash = row.get_string(hash).map_err(|e| e.to_string())?.to_ascii_lowercase();
+        if !wanted.contains(&tx_hash) {
+            continue;
+        }
+        let millis = row.get_timestamp_millis(timestamp).map_err(|e| e.to_string())?;
+        let millis = u64::try_from(millis).map_err(|_| "timestamp before 1970")?;
+        first_seen
+            .entry(tx_hash)
+            .and_modify(|seen: &mut u64| *seen = (*seen).min(millis))
+            .or_insert(millis);
+    }
+    Ok(())
 }
 
 fn propamm_pair(v: Vec<String>) -> ExitCode {
