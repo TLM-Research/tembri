@@ -1,0 +1,35 @@
+# Daily PropAMM report (tembri propamm-report --config config/propamm_reports.toml).
+# One report per complete UTC day. Run `--date YYYY-MM-DD` to override `dates`.
+dates = "2026-10-05"
+
+# Inputs. Xatu partitions need blocks, transactions and logs (traces optional).
+# Binance spot 1s klines from data.binance.vision, checksum-verified and
+# unzipped: SYMBOL-1s-YYYY-MM-DD.csv for the day and the next day, for
+# ETHUSDT and USDCUSDT. Mempool Dumpster daily Parquet for the day before,
+# the day and the day after: YYYY-MM-DD.parquet.
+xatu_dir = "data/raw/xatu"
+binance_dir = "data/raw/binance"
+mempool_dir = "data/raw/mempool_dumpster"
+
+# Outputs: NDJSON stages in output_dir/DATE/ and output_dir/propamm_DATE.md.
+output_dir = "reports/propamm"
+
+# Reviewed evidence (see config/labels.toml and the PropAMM ADRs).
+fill_rules = "config/propamm_fill_rules.ndjson"
+registry_targets = "config/propamm_registry_targets.ndjson"
+takers = "config/propamm_takers.ndjson"
+registry = "0xda7afeed021eafc1c1af9c362de477dad0396b81"
+
+# auto: use Xatu traces when every partition of the day has them;
+# required: fail without them; off: top-level registry calls only.
+traces = "auto"
+
+# Refuse partial days.
+min_blocks_per_day = 6500
+
+# Spread clusters. Volatility is the std of ETH/USDT 1 s log returns over the
+# window before the block; the cuts are the terciles over 2026-09-10..10-09
+# (adr/2026-10-30-propamm-p2-spreads-gating-timing-public-swaps.md).
+volatility_window_s = 300
+volatility_cuts_bp = "0.44,0.72"
+size_cuts_usd = "1000,10000,100000"

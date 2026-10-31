@@ -228,6 +228,28 @@ cargo run -p tembri -- propamm-routes \
   --sandwiches-out data/propamm/sandwiches.ndjson
 ```
 
+### Daily PropAMM report
+
+`propamm-report` runs the reviewed pipeline for each UTC day in
+`config/propamm_reports.toml` (or `--date YYYY-MM-DD`): projection, decoding,
+pairing with quote ages, CEX markouts, taker classes, routes and same-pool
+sandwiches. It writes every stage as NDJSON under `output_dir/DATE/` and a
+Markdown report `output_dir/propamm_DATE.md` with activity by venue,
+builders, pairing, markout distributions, taker classes, routes, and spreads
+by volatility cluster, size and builder. It refuses a day with fewer than
+`min_blocks_per_day` blocks or a gap, and uses Xatu traces when every
+partition of the day has them (`traces = "auto"`).
+
+```bash
+cargo run --release -p tembri -- propamm-report --config config/propamm_reports.toml --date 2026-10-05
+```
+
+Inputs are not fetched by this command. It needs the Xatu partitions;
+Binance spot one-second klines (`ETHUSDT` and `USDCUSDT`, the day and the
+next day, unzipped from data.binance.vision after checking their
+`.CHECKSUM`); and Mempool Dumpster files for the day before, the day and the
+day after.
+
 ## Run a lifecycle report
 
 Lifecycle measurement consumes newline-delimited JSON inputs for public-mempool observations and block admissions. Activity labels can be joined through an optional activity file.

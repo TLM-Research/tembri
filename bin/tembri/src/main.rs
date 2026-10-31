@@ -1,4 +1,5 @@
 mod propamm_project;
+mod propamm_report;
 
 use parquet::{
     basic::Type as ParquetPhysicalType,
@@ -31,11 +32,12 @@ fn main() -> ExitCode {
         Some("propamm-cex-markouts") => propamm_cex_markouts(a.collect()),
         Some("propamm-takers") => propamm_takers(a.collect()),
         Some("propamm-routes") => propamm_routes(a.collect()),
+        Some("propamm-report") => propamm_report::propamm_report_cmd(a.collect()),
         Some("mempool-lifecycle") => mempool_lifecycle(a.collect()),
         Some("run-period") => run_period(a.collect()),
         Some("report") => report(a.collect()),
         _ => {
-            println!("Usage: tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|propamm-bytecode-group|propamm-project|propamm-decode|propamm-pair|propamm-markouts|propamm-cex-markouts|propamm-takers|propamm-routes|mempool-lifecycle|run-period|report> ...");
+            println!("Usage: tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|propamm-bytecode-group|propamm-project|propamm-decode|propamm-pair|propamm-markouts|propamm-cex-markouts|propamm-takers|propamm-routes|propamm-report|mempool-lifecycle|run-period|report> ...");
             ExitCode::from(2)
         }
     }

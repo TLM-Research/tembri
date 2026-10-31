@@ -75,6 +75,22 @@ impl CexSeries {
         (age <= CEX_MAX_AGE_SECONDS).then_some((close, age))
     }
 
+    /// Standard deviation, in bp, of one-second log returns of the carried
+    /// price (`price_at`) at each second from `time - window` to `time`.
+    /// `None` with fewer than 30 returns.
+    pub fn return_volatility_bp(&self, time: u64, window: u64) -> Option<f64> {
+        let prices: Vec<f64> = (time.checked_sub(window)?..=time)
+            .filter_map(|second| self.price_at(second).map(|(price, _)| price))
+            .collect();
+        let returns: Vec<f64> = prices.windows(2).map(|pair| (pair[1] / pair[0]).ln() * 1e4).collect();
+        if returns.len() < 30 {
+            return None;
+        }
+        let mean = returns.iter().sum::<f64>() / returns.len() as f64;
+        let variance = returns.iter().map(|value| (value - mean).powi(2)).sum::<f64>() / (returns.len() - 1) as f64;
+        Some(variance.sqrt())
+    }
+
     pub fn len(&self) -> usize {
         self.closes.len()
     }
@@ -202,6 +218,19 @@ mod tests {
         millis.add_binance_klines(&format!("{},1,1,1,7,1,0,1,1,0,0,0", T * 1_000)).unwrap();
         assert_eq!(millis.price_at(T + 1), Some((7.0, 0)));
         assert!(CexSeries::default().add_binance_klines(&format!("{},1,1,1,7,1,0,1,1,0,0,0", T * 1_000 + 5)).is_err());
+    }
+
+    #[test]
+    fn return_volatility_is_the_std_of_one_second_log_returns() {
+        // Prices alternate 100 and 100.01 each second: returns of about
+        // +1 and -1 bp, so the standard deviation is about 1 bp.
+        let csv: String = (0..100).map(|i| kline(T + i, if i % 2 == 0 { 100.0 } else { 100.01 }, 1)).collect();
+        let mut series = CexSeries::default();
+        series.add_binance_klines(&csv).unwrap();
+        let vol = series.return_volatility_bp(T + 100, 60).unwrap();
+        assert!((vol - 1.0).abs() < 0.01, "{vol}");
+        // Fewer than 30 returns in the window.
+        assert_eq!(series.return_volatility_bp(T + 20, 60), None);
     }
 
     #[test]

@@ -43,6 +43,11 @@
   `config/propamm_registry_targets.ndjson`.
 - 17 golden-block fixtures (20 golden blocks in all, every venue covered),
   checked by an integration test against the committed rules.
+- Daily report (TODO items 17 and 18): `tembri propamm-report` with
+  `config/propamm_reports.toml` runs the whole PropAMM pipeline for a UTC
+  day and writes NDJSON stages and a Markdown report, including spreads by
+  volatility cluster (`CexSeries::return_volatility_bp`). See
+  `adr/2026-10-30-propamm-daily-report.md`.
 
 ## Changed
 
@@ -95,5 +100,5 @@
   spreads by size, volatility and builder against Uniswap V3; Metric's
   oracle age at fills; relay sealing times; repeated updates per block; and
   public-swap sandwich rates by size.
-- `cargo test --workspace` (59 tests) and
+- `cargo test --workspace` (62 tests) and
   `cargo clippy --workspace -- -D warnings` pass.
