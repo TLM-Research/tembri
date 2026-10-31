@@ -1,15 +1,22 @@
-# Daily PropAMM report (tembri propamm-report --config config/propamm_reports.toml).
-# One report per complete UTC day. Run `--date YYYY-MM-DD` to override `dates`.
+# Daily PropAMM report. Fetch inputs, then report:
+#   tembri propamm-fetch  --config config/propamm_reports.toml [--date YYYY-MM-DD]
+#   tembri propamm-report --config config/propamm_reports.toml [--date YYYY-MM-DD]
+# One report per complete UTC day. `--date` overrides `dates`.
 dates = "2026-10-05"
 
-# Inputs. Xatu partitions need blocks, transactions and logs (traces optional).
-# Binance spot 1s klines from data.binance.vision, checksum-verified and
-# unzipped: SYMBOL-1s-YYYY-MM-DD.csv for the day and the next day, for
-# ETHUSDT and USDCUSDT. Mempool Dumpster daily Parquet for the day before,
-# the day and the day after: YYYY-MM-DD.parquet.
+# Inputs, all written by propamm-fetch.
+# - Xatu partitions: blocks, transactions and logs (traces optional).
+# - Binance spot 1s klines, SYMBOL-1s-YYYY-MM-DD.csv for the day and the next,
+#   for ETHUSDT and USDCUSDT.
+# - Mempool Dumpster YYYY-MM-DD.parquet for the day before, the day and the
+#   day after.
+# Binance and Dumpster files must be listed in their directory's SHA256SUMS.
+# - Relay receipts of blocks with fills: relay_dir/DATE/{relays,receipts}.ndjson.
 xatu_dir = "data/raw/xatu"
 binance_dir = "data/raw/binance"
 mempool_dir = "data/raw/mempool_dumpster"
+relay_dir = "data/raw/relay"
+relays = "relay.ultrasound.money,titanrelay.xyz,aestus.live,boost-relay.flashbots.net,bloxroute.max-profit.blxrbdn.com,bloxroute.regulated.blxrbdn.com,agnostic-relay.net,relay.wenmerge.com,mainnet-relay.securerpc.com"
 
 # Outputs: NDJSON stages in output_dir/DATE/ and output_dir/propamm_DATE.md.
 output_dir = "reports/propamm"
@@ -21,7 +28,8 @@ takers = "config/propamm_takers.ndjson"
 registry = "0xda7afeed021eafc1c1af9c362de477dad0396b81"
 
 # auto: use Xatu traces when every partition of the day has them;
-# required: fail without them; off: top-level registry calls only.
+# required: fail without them (propamm-fetch then fetches them);
+# off: top-level registry calls only.
 traces = "auto"
 
 # Refuse partial days.
@@ -33,3 +41,6 @@ min_blocks_per_day = 6500
 volatility_window_s = 300
 volatility_cuts_bp = "0.44,0.72"
 size_cuts_usd = "1000,10000,100000"
+
+# Spread comparison: Uniswap V3 0.05% USDC/WETH and WETH/USDT, ADDRESS:stable.
+uniswap_v3_pools = "0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640:usdc,0x11b815efb8f581194ae79006d24e0d814b7697f6:usdt"

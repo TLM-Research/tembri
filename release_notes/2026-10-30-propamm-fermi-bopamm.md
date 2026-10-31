@@ -48,6 +48,12 @@
   day and writes NDJSON stages and a Markdown report, including spreads by
   volatility cluster (`CexSeries::return_volatility_bp`). See
   `adr/2026-10-30-propamm-daily-report.md`.
+- Input fetcher: `tembri propamm-fetch` fetches a day's Xatu partitions,
+  Binance klines (checked against Binance's SHA-256 and the zip CRC-32),
+  Mempool Dumpster files (checked by length and Parquet read) and relay
+  receipts. Binance and Dumpster files are listed in `SHA256SUMS`, which the
+  report checks. The report adds a Uniswap V3 size comparison and relay
+  sealing times. See `adr/2026-10-31-propamm-input-fetcher.md`.
 
 ## Changed
 
@@ -100,5 +106,5 @@
   spreads by size, volatility and builder against Uniswap V3; Metric's
   oracle age at fills; relay sealing times; repeated updates per block; and
   public-swap sandwich rates by size.
-- `cargo test --workspace` (62 tests) and
+- `cargo test --workspace` (68 tests) and
   `cargo clippy --workspace -- -D warnings` pass.

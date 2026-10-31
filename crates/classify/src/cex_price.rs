@@ -100,6 +100,21 @@ impl CexSeries {
     }
 }
 
+/// ETH priced in `stable` before Unix second `time`, and the ETH/USDT age.
+fn stable_mid(eth_usdt: &CexSeries, usdc_usdt: &CexSeries, stable: &str, time: u64) -> Option<(f64, u64)> {
+    let (eth, age) = eth_usdt.price_at(time)?;
+    let price = if stable == "usdc" { eth / usdc_usdt.price_at(time)?.0 } else { eth };
+    Some((price, age))
+}
+
+/// The taker-signed markout of a priced fill at another time, in bp, priced
+/// as `propamm_cex_markouts` prices its horizons.
+pub fn cex_markout_at(row: &PropammCexMarkout, time: u64, eth_usdt: &CexSeries, usdc_usdt: &CexSeries) -> Option<f64> {
+    let sign = if row.taker_side == "buy_weth" { 1.0 } else { -1.0 };
+    let (price, _) = stable_mid(eth_usdt, usdc_usdt, &row.stable, time)?;
+    Some(sign * (price - row.fill_price) / row.fill_price * 1e4)
+}
+
 /// CEX markouts for every WETH/USDC and WETH/USDT fill, at every horizon in
 /// `CEX_HORIZONS_SECONDS`. USDT fills use
 /// ETH/USDT; USDC fills use ETH/USDT divided by USDC/USDT at the same time.
@@ -123,11 +138,7 @@ pub fn propamm_cex_markouts(
             .copied()
             .flatten()
             .ok_or_else(|| format!("fill block {} has no timestamp in the period", event.block_number))?;
-        let mid = |time: u64| {
-            let (eth, age) = eth_usdt.price_at(time)?;
-            let price = if stable == "usdc" { eth / usdc_usdt.price_at(time)?.0 } else { eth };
-            Some((price, age))
-        };
+        let mid = |time: u64| stable_mid(eth_usdt, usdc_usdt, stable, time);
         let markout = |time: u64| mid(time).map(|(price, _)| sign * (price - fill_price) / fill_price * 1e4);
         let at_fill = mid(block_timestamp);
         let [m12, m4, m2, h0, h12, h60, h300] =
@@ -274,5 +285,8 @@ mod tests {
             ]
         );
         assert!(propamm_cex_markouts(&events, &[], &eth, &usdc).is_err());
+        // Repricing a row at a horizon reproduces that horizon.
+        assert_eq!(cex_markout_at(&rows[1], T + 12, &eth, &usdc), rows[1].markout_12s_bp);
+        assert_eq!(cex_markout_at(&rows[0], T - 4, &eth, &usdc), None);
     }
 }

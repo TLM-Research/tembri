@@ -651,3 +651,24 @@ pub struct LabelRow {
     pub delay_tolerant: bool,
     pub density: Wei,
 }
+
+/// The first time one relay received a winning block, from the relay data
+/// API (`builder_blocks_received?block_hash=`).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RelayBlockReceipt {
+    pub block_number: BlockNumber,
+    pub block_hash: String,
+    pub relay: String,
+    /// Earliest submission of this block hash, Unix milliseconds; `None`
+    /// when the relay answered but never received the block.
+    pub received_ms: Option<u64>,
+    /// Set when every attempt to query the relay failed.
+    pub error: Option<String>,
+}
+
+/// Whether a relay answered the probe before a receipt fetch.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RelayStatus {
+    pub relay: String,
+    pub error: Option<String>,
+}

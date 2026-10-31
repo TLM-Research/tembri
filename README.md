@@ -230,25 +230,45 @@ cargo run -p tembri -- propamm-routes \
 
 ### Daily PropAMM report
 
-`propamm-report` runs the reviewed pipeline for each UTC day in
-`config/propamm_reports.toml` (or `--date YYYY-MM-DD`): projection, decoding,
-pairing with quote ages, CEX markouts, taker classes, routes and same-pool
-sandwiches. It writes every stage as NDJSON under `output_dir/DATE/` and a
-Markdown report `output_dir/propamm_DATE.md` with activity by venue,
-builders, pairing, markout distributions, taker classes, routes, and spreads
-by volatility cluster, size and builder. It refuses a day with fewer than
-`min_blocks_per_day` blocks or a gap, and uses Xatu traces when every
-partition of the day has them (`traces = "auto"`).
+`propamm-fetch` fetches a day's inputs and `propamm-report` runs the reviewed
+pipeline on them, for each UTC day in `config/propamm_reports.toml` (or
+`--date YYYY-MM-DD`).
 
 ```bash
+cargo run --release -p tembri -- propamm-fetch --config config/propamm_reports.toml --date 2026-10-05
 cargo run --release -p tembri -- propamm-report --config config/propamm_reports.toml --date 2026-10-05
 ```
 
-Inputs are not fetched by this command. It needs the Xatu partitions;
-Binance spot one-second klines (`ETHUSDT` and `USDCUSDT`, the day and the
-next day, unzipped from data.binance.vision after checking their
-`.CHECKSUM`); and Mempool Dumpster files for the day before, the day and the
-day after.
+`propamm-fetch` writes:
+- the Xatu partitions covering the day, found by probing block timestamps,
+  with traces only when `traces = "required"`;
+- Binance spot one-second klines (`ETHUSDT`, `USDCUSDT`) for the day and the
+  next. Each zip must match Binance's published SHA-256 and its CRC-32;
+- Mempool Dumpster files for the day before, the day and the day after. The
+  archive publishes no checksums, so a file must match the served length and
+  read as Parquet with `hash` and `timestamp` columns;
+- relay receipts of every winning block with a fill, from the relay data APIs
+  (`relay_dir/DATE/receipts.ndjson`; relays that do not answer are listed in
+  `relays.ndjson`).
+
+Binance and Dumpster files are listed in their directory's `SHA256SUMS`
+(`sha256sum -c` format). `propamm-report` refuses a file that is not listed or
+no longer matches.
+
+`propamm-report` runs projection, decoding, pairing with quote ages, CEX
+markouts, taker classes, routes and same-pool sandwiches. It writes every
+stage as NDJSON under `output_dir/DATE/` and a Markdown report
+`output_dir/propamm_DATE.md` with:
+- activity by venue, builders and pairing;
+- markout distributions and taker classes;
+- routes;
+- spreads by volatility cluster, size and builder;
+- a size comparison with Uniswap V3 swaps priced the same way;
+- the time relays first received each winning block, and markouts at that
+  time.
+
+It refuses a day with fewer than `min_blocks_per_day` blocks or a gap, and
+uses Xatu traces when every partition of the day has them (`traces = "auto"`).
 
 ## Run a lifecycle report
 

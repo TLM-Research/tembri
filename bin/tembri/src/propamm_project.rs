@@ -372,6 +372,37 @@ pub(crate) fn project_xatu_plan(
     Ok((all_logs, all_calls, period_blocks, reference, envelopes))
 }
 
+/// Logs emitted by `addresses` in the plan's blocks, across its partitions.
+pub(crate) fn read_plan_logs(
+    plan: &tlm_report::ReportPlan,
+    addresses: &BTreeSet<String>,
+) -> Result<Vec<XatuLogRow>, String> {
+    let selected = |block: u64| plan.block_numbers.as_ref().is_none_or(|blocks| blocks.contains(&block));
+    let mut logs = Vec::new();
+    for path in xatu_plan_files(plan, "logs")? {
+        logs.extend(read_logs(&path, addresses, &selected)?);
+    }
+    logs.sort_by_key(|log| (log.block_number, log.tx_index, log.log_index));
+    Ok(logs)
+}
+
+/// Number, Unix-second timestamp and hash of every block in a Xatu blocks
+/// file.
+pub(crate) fn read_block_hashes(path: &PathBuf) -> Result<Vec<(u64, u64, String)>, String> {
+    let reader = xatu_reader(path)?;
+    let [number, date_time, hash] = columns(&reader, path, &["block_number", "block_date_time", "block_hash"])?[..] else {
+        unreachable!("three columns requested")
+    };
+    let mut blocks = Vec::new();
+    for row in reader.get_row_iter(None).map_err(|e| e.to_string())? {
+        let row = row.map_err(|e| e.to_string())?;
+        let block_hash = parquet_text(&row, hash).ok_or_else(|| format!("{}: block without hash", path.display()))?;
+        blocks.push((parquet_u64(&row, number)?, block_timestamp(&row, date_time)?, block_hash));
+    }
+    blocks.sort();
+    Ok(blocks)
+}
+
 /// Resolve Xatu columns by name: physical positions differ between schema
 /// versions (see the base-fee fix of 2026-10-29).
 fn columns(reader: &SerializedFileReader<File>, path: &Path, names: &[&str]) -> Result<Vec<usize>, String> {

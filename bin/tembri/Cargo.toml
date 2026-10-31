@@ -14,6 +14,7 @@ tlm-ingest = { path = "../../crates/ingest" }
 serde_json = "1"
 serde = "1"
 parquet = "53"
+chrono = "0.4"
 tlm-classify = { path = "../../crates/classify" }
 tlm-model = { path = "../../crates/model" }
 tlm-report = { path = "../../crates/report" }
