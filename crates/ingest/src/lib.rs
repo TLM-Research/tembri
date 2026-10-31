@@ -1,4 +1,5 @@
 //! Read-only Ethereum JSON-RPC ingest.
+pub mod propamm_inputs;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
@@ -333,6 +334,17 @@ pub fn fetch_xatu_range(
     if from > to {
         return Err("from block must not exceed to block".into());
     }
+    fetch_xatu_partitions(from, to, datasets, &output.join("xatu"))
+}
+
+/// As `fetch_xatu_range`, writing partitions directly under `xatu_dir`. A
+/// chunk Xatu has not published yet is an error naming the chunk.
+pub fn fetch_xatu_partitions(
+    from: BlockNumber,
+    to: BlockNumber,
+    datasets: &[XatuDataset],
+    xatu_dir: &Path,
+) -> Result<(u64, u64), String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
         .build()
@@ -340,7 +352,7 @@ pub fn fetch_xatu_range(
     let mut downloaded = 0;
     let mut cached = 0;
     for chunk in ((from / 1000) * 1000..=((to / 1000) * 1000)).step_by(1000) {
-        let part = output.join("xatu").join(chunk.to_string());
+        let part = xatu_dir.join(chunk.to_string());
         fs::create_dir_all(&part).map_err(|e| e.to_string())?;
         for dataset in datasets {
             let target = part.join(format!("{}.parquet", dataset.file_stem()));
@@ -350,6 +362,9 @@ pub fn fetch_xatu_range(
             }
             let url = xatu_chunk_url(*dataset, chunk)?;
             let mut response = client.get(&url).send().map_err(|e| format!("{url}: {e}"))?;
+            if response.status() == reqwest::StatusCode::NOT_FOUND {
+                return Err(format!("{url}: Xatu has not published chunk {chunk}"));
+            }
             if !response.status().is_success() {
                 return Err(format!("{url}: HTTP {}", response.status()));
             }

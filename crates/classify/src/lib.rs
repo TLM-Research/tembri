@@ -1,19 +1,36 @@
 //! Deterministic transaction labels. Protocol-specific signature lists belong in config.
 
 pub mod activity;
+pub mod cex_price;
 pub mod fee_fingerprint;
 pub mod lifecycle;
+pub mod markout;
 pub mod propamm;
+pub mod reference_price;
+pub mod route;
+pub mod taker;
+pub mod uniswap;
 pub use activity::{
     ActivityFilter, ClassifiedActivity, CompositionCounts, MempoolVisibility, PublicMempoolIndex,
     TipBucket,
 };
 pub use fee_fingerprint::{fingerprint_fee_fields, FeeFingerprint, FeeFingerprintConfig};
 pub use lifecycle::measure_mempool_lifecycle;
+pub use cex_price::{cex_markout_at, propamm_cex_markouts, CexSeries, CEX_HORIZONS_SECONDS, CEX_MAX_AGE_SECONDS};
+pub use markout::propamm_markouts;
+pub use route::{classify_propamm_routes, find_propamm_sandwiches};
+pub use uniswap::{uniswap_v3_fill, UniswapV3Pool};
+pub use taker::{classify_propamm_takers, summarize_taker_markouts, TAKER_CLASS_RANK};
+pub use reference_price::{
+    decode_reference_swap, reference_block_closes, reference_mid_before, REFERENCE_POOL,
+    UNISWAP_V3_SWAP_TOPIC,
+};
 pub use propamm::{
-    decode_propamm_activity, decode_propamm_log, decode_registry_batch_updates, pair_propamm_events,
-    group_runtime_bytecode, summarize_propamm_blocks, summarize_propamm_builders,
-    REGISTRY_BATCH_UPDATE_SELECTOR,
+    add_period_blocks, add_quote_ages,
+    decode_propamm_activity, decode_propamm_log, decode_registry_batch_updates,
+    decode_registry_direct_update, decode_swapped_terms, group_runtime_bytecode, pair_propamm_events,
+    summarize_propamm_blocks, summarize_propamm_builders, REGISTRY_BATCH_UPDATE_SELECTOR,
+    REGISTRY_UPDATE_STATE_SELECTOR, SWAPPED_TOPIC,
 };
 
 use tlm_model::{Block, LabelConfig, MempoolSeen, Transaction, TxLabels};

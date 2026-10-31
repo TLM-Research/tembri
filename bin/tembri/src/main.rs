@@ -1,3 +1,7 @@
+mod propamm_project;
+mod propamm_fetch;
+mod propamm_report;
+
 use parquet::{
     basic::Type as ParquetPhysicalType,
     file::reader::{FileReader, SerializedFileReader},
@@ -5,7 +9,7 @@ use parquet::{
 };
 use serde_json::{json, Value};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::{self, File},
     io::{BufRead, BufReader, Write},
     path::PathBuf,
@@ -22,13 +26,20 @@ fn main() -> ExitCode {
         Some("classify") => classify(a.collect()),
         Some("metrics") => metrics(a.collect()),
         Some("propamm-bytecode-group") => propamm_bytecode_group(a.collect()),
+        Some("propamm-project") => propamm_project_cmd(a.collect()),
         Some("propamm-decode") => propamm_decode(a.collect()),
         Some("propamm-pair") => propamm_pair(a.collect()),
+        Some("propamm-markouts") => propamm_markouts(a.collect()),
+        Some("propamm-cex-markouts") => propamm_cex_markouts(a.collect()),
+        Some("propamm-takers") => propamm_takers(a.collect()),
+        Some("propamm-routes") => propamm_routes(a.collect()),
+        Some("propamm-fetch") => propamm_fetch::propamm_fetch_cmd(a.collect()),
+        Some("propamm-report") => propamm_report::propamm_report_cmd(a.collect()),
         Some("mempool-lifecycle") => mempool_lifecycle(a.collect()),
         Some("run-period") => run_period(a.collect()),
         Some("report") => report(a.collect()),
         _ => {
-            println!("Usage: tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|propamm-bytecode-group|propamm-decode|propamm-pair|mempool-lifecycle|run-period|report> ...");
+            println!("Usage: tembri <fetch|fetch-xatu|fetch-cryo|classify|metrics|propamm-bytecode-group|propamm-project|propamm-decode|propamm-pair|propamm-markouts|propamm-cex-markouts|propamm-takers|propamm-routes|propamm-fetch|propamm-report|mempool-lifecycle|run-period|report> ...");
             ExitCode::from(2)
         }
     }
@@ -394,6 +405,111 @@ fn propamm_bytecode_group(v: Vec<String>) -> ExitCode {
     }
 }
 
+fn propamm_project_cmd(v: Vec<String>) -> ExitCode {
+    let (Some(xatu), Some(fill_rules_path), Some(registry), Some(logs_out), Some(calls_out)) = (
+        arg(&v, "--xatu"),
+        arg(&v, "--fill-rules"),
+        v.windows(2)
+            .find(|window| window[0] == "--registry")
+            .map(|window| window[1].to_ascii_lowercase()),
+        arg(&v, "--logs-out"),
+        arg(&v, "--calls-out"),
+    ) else {
+        eprintln!(
+            "Usage: tembri propamm-project --xatu DIR [--period available|YYYY-MM|YYYY-MM-DD] --fill-rules RULES.ndjson --registry ADDRESS [--with-traces] --logs-out LOGS.ndjson --calls-out CALLS.ndjson [--period-blocks-out BLOCKS.ndjson] [--txs-out TXS.ndjson] [--reference-out PRICES.ndjson] [--reference-blocks-out CLOSES.ndjson]"
+        );
+        return ExitCode::from(2);
+    };
+    let period = match tlm_report::ReportPeriod::parse(
+        v.windows(2)
+            .find(|window| window[0] == "--period")
+            .map(|window| window[1].as_str())
+            .unwrap_or("available"),
+    ) {
+        Ok(period) => period,
+        Err(error) => {
+            eprintln!("invalid period: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let rules = match read_ndjson::<tlm_model::PropammEventRule>(&fill_rules_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid PropAMM fill-rule input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let emitters = rules
+        .iter()
+        .map(|rule| rule.emitter.to_ascii_lowercase())
+        .collect();
+    let config = tlm_report::ReportConfig::activity_tip(&xatu, ".", period);
+    let plan = match tlm_report::plan(&config) {
+        Ok(plan) => plan,
+        Err(error) => {
+            eprintln!("PropAMM projection plan failed: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let with_traces = v.iter().any(|flag| flag == "--with-traces");
+    let reference_out = arg(&v, "--reference-out");
+    let reference_blocks_out = arg(&v, "--reference-blocks-out");
+    let with_reference = reference_out.is_some() || reference_blocks_out.is_some();
+    let (logs, calls, period_blocks, reference, envelopes) = match propamm_project::project_xatu_plan(
+        &plan,
+        &registry,
+        &emitters,
+        with_traces,
+        with_reference,
+    ) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("PropAMM projection failed: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    if let Err(error) = write_ndjson(&logs_out, &logs) {
+        eprintln!("cannot write PropAMM logs: {error}");
+        return ExitCode::from(1);
+    }
+    if let Err(error) = write_ndjson(&calls_out, &calls) {
+        eprintln!("cannot write PropAMM calls: {error}");
+        return ExitCode::from(1);
+    }
+    if let Some(path) = arg(&v, "--txs-out") {
+        if let Err(error) = write_ndjson(&path, &envelopes) {
+            eprintln!("cannot write PropAMM transaction envelopes: {error}");
+            return ExitCode::from(1);
+        }
+    }
+    if let Some(path) = arg(&v, "--period-blocks-out") {
+        if let Err(error) = write_ndjson(&path, &period_blocks) {
+            eprintln!("cannot write period blocks: {error}");
+            return ExitCode::from(1);
+        }
+    }
+    if let Some(path) = reference_out {
+        if let Err(error) = write_ndjson(&path, &reference) {
+            eprintln!("cannot write reference prices: {error}");
+            return ExitCode::from(1);
+        }
+    }
+    if let Some(path) = reference_blocks_out {
+        let closes = tlm_classify::reference_block_closes(&reference, &period_blocks);
+        if let Err(error) = write_ndjson(&path, &closes) {
+            eprintln!("cannot write reference block prices: {error}");
+            return ExitCode::from(1);
+        }
+    }
+    println!(
+        "wrote {} PropAMM log rows and {} registry call rows for {}",
+        logs.len(),
+        calls.len(),
+        plan.label
+    );
+    ExitCode::SUCCESS
+}
+
 fn propamm_decode(v: Vec<String>) -> ExitCode {
     let (Some(logs_path), Some(calls_path), Some(fill_rules_path), Some(registry), Some(targets_path), Some(out)) = (
         arg(&v, "--logs"),
@@ -459,6 +575,302 @@ fn propamm_decode(v: Vec<String>) -> ExitCode {
     }
 }
 
+fn propamm_markouts(v: Vec<String>) -> ExitCode {
+    let (Some(events_path), Some(reference_path), Some(closes_path), Some(out)) = (
+        arg(&v, "--events"),
+        arg(&v, "--reference"),
+        arg(&v, "--reference-blocks"),
+        arg(&v, "--out"),
+    ) else {
+        eprintln!(
+            "Usage: tembri propamm-markouts --events EVENTS.ndjson --reference PRICES.ndjson --reference-blocks CLOSES.ndjson --out MARKOUTS.ndjson"
+        );
+        return ExitCode::from(2);
+    };
+    let events = match read_ndjson::<tlm_model::PropammEvent>(&events_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid PropAMM event input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let mut points = match read_ndjson::<tlm_model::ReferencePricePoint>(&reference_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid reference price input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    points.sort_by_key(|point| (point.block_number, point.tx_position, point.log_index));
+    let closes = match read_ndjson::<tlm_model::ReferenceBlockPrice>(&closes_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid reference block input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let rows = match tlm_classify::propamm_markouts(&events, &points, &closes) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("PropAMM markouts failed: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    if let Err(error) = write_ndjson(&out, &rows) {
+        eprintln!("cannot write PropAMM markouts: {error}");
+        return ExitCode::from(1);
+    }
+    let fills = events
+        .iter()
+        .filter(|event| event.kind == tlm_model::PropammEventKind::Fill)
+        .count();
+    println!("wrote {} WETH/stablecoin markout rows of {fills} fills", rows.len());
+    ExitCode::SUCCESS
+}
+
+/// Load comma-separated Binance kline CSV files into one series.
+fn read_cex_series(paths: &str) -> Result<tlm_classify::CexSeries, String> {
+    let mut series = tlm_classify::CexSeries::default();
+    for path in paths.split(',') {
+        let csv = fs::read_to_string(path).map_err(|error| format!("{path}: {error}"))?;
+        series.add_binance_klines(&csv).map_err(|error| format!("{path}: {error}"))?;
+    }
+    Ok(series)
+}
+
+fn propamm_cex_markouts(v: Vec<String>) -> ExitCode {
+    let value = |name: &str| v.windows(2).find(|window| window[0] == name).map(|window| window[1].clone());
+    let (Some(events_path), Some(period_path), Some(eth_usdt), Some(usdc_usdt), Some(out)) = (
+        arg(&v, "--events"),
+        arg(&v, "--period-blocks"),
+        value("--eth-usdt"),
+        value("--usdc-usdt"),
+        arg(&v, "--out"),
+    ) else {
+        eprintln!(
+            "Usage: tembri propamm-cex-markouts --events EVENTS.ndjson --period-blocks BLOCKS.ndjson --eth-usdt KLINES.csv[,KLINES.csv] --usdc-usdt KLINES.csv[,KLINES.csv] --out MARKOUTS.ndjson"
+        );
+        return ExitCode::from(2);
+    };
+    let events = match read_ndjson::<tlm_model::PropammEvent>(&events_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid PropAMM event input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let period = match read_ndjson::<tlm_model::PropammPeriodBlock>(&period_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid period block input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let (eth_usdt, usdc_usdt) = match (read_cex_series(&eth_usdt), read_cex_series(&usdc_usdt)) {
+        (Ok(eth), Ok(usdc)) => (eth, usdc),
+        (Err(error), _) | (_, Err(error)) => {
+            eprintln!("invalid Binance kline input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let rows = match tlm_classify::propamm_cex_markouts(&events, &period, &eth_usdt, &usdc_usdt) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("PropAMM CEX markouts failed: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    if let Err(error) = write_ndjson(&out, &rows) {
+        eprintln!("cannot write PropAMM CEX markouts: {error}");
+        return ExitCode::from(1);
+    }
+    let priced = rows.iter().filter(|row| row.markout_0s_bp.is_some()).count();
+    println!(
+        "wrote {} WETH/stablecoin CEX markout rows, {priced} priced at the fill, from {} ETH/USDT and {} USDC/USDT traded seconds",
+        rows.len(),
+        eth_usdt.len(),
+        usdc_usdt.len()
+    );
+    ExitCode::SUCCESS
+}
+
+fn propamm_takers(v: Vec<String>) -> ExitCode {
+    let (Some(events_path), Some(txs_path), Some(labels_path), Some(out)) = (
+        arg(&v, "--events"),
+        arg(&v, "--txs"),
+        arg(&v, "--takers"),
+        arg(&v, "--out"),
+    ) else {
+        eprintln!(
+            "Usage: tembri propamm-takers --events EVENTS.ndjson --txs TXS.ndjson --takers TAKERS.ndjson --out TAKER_FILLS.ndjson [--cex-markouts MARKOUTS.ndjson --summary-out CLASSES.ndjson]"
+        );
+        return ExitCode::from(2);
+    };
+    let events = match read_ndjson::<tlm_model::PropammEvent>(&events_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid PropAMM event input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let txs = match read_ndjson::<tlm_model::PropammTxEnvelope>(&txs_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid PropAMM transaction input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let labels = match read_ndjson::<tlm_model::PropammTakerLabel>(&labels_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid taker label input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let takers = match tlm_classify::classify_propamm_takers(&events, &txs, &labels) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("PropAMM taker classification failed: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    if let Err(error) = write_ndjson(&out, &takers) {
+        eprintln!("cannot write PropAMM taker fills: {error}");
+        return ExitCode::from(1);
+    }
+    println!("wrote {} PropAMM taker fill rows", takers.len());
+    match (arg(&v, "--cex-markouts"), arg(&v, "--summary-out")) {
+        (Some(markouts_path), Some(summary_out)) => {
+            let markouts = match read_ndjson::<tlm_model::PropammCexMarkout>(&markouts_path) {
+                Ok(rows) => rows,
+                Err(error) => {
+                    eprintln!("invalid PropAMM CEX markout input: {error}");
+                    return ExitCode::from(2);
+                }
+            };
+            let summary = tlm_classify::summarize_taker_markouts(&takers, &markouts);
+            if let Err(error) = write_ndjson(&summary_out, &summary) {
+                eprintln!("cannot write PropAMM taker summary: {error}");
+                return ExitCode::from(1);
+            }
+            println!("wrote {} taker class rows", summary.len());
+        }
+        (None, None) => {}
+        _ => {
+            eprintln!("--cex-markouts and --summary-out go together");
+            return ExitCode::from(2);
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+fn propamm_routes(v: Vec<String>) -> ExitCode {
+    let (Some(events_path), Some(txs_path), Some(period_path), Some(mempool), Some(out), Some(sandwiches_out)) = (
+        arg(&v, "--events"),
+        arg(&v, "--txs"),
+        arg(&v, "--period-blocks"),
+        v.windows(2).find(|x| x[0] == "--mempool").map(|x| x[1].clone()),
+        arg(&v, "--out"),
+        arg(&v, "--sandwiches-out"),
+    ) else {
+        eprintln!(
+            "Usage: tembri propamm-routes --events EVENTS.ndjson --txs TXS.ndjson --period-blocks BLOCKS.ndjson --mempool DUMPSTER.parquet[,DUMPSTER.parquet] --out ROUTES.ndjson --sandwiches-out SANDWICHES.ndjson"
+        );
+        return ExitCode::from(2);
+    };
+    let events = match read_ndjson::<tlm_model::PropammEvent>(&events_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid PropAMM event input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let txs = match read_ndjson::<tlm_model::PropammTxEnvelope>(&txs_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid PropAMM transaction input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let period = match read_ndjson::<tlm_model::PropammPeriodBlock>(&period_path) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("invalid period block input: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let wanted: HashSet<String> = txs.iter().map(|tx| tx.tx_hash.to_ascii_lowercase()).collect();
+    let mut first_seen = HashMap::new();
+    for path in mempool.split(',').filter(|path| !path.is_empty()) {
+        if let Err(error) = read_dumpster_first_seen(&PathBuf::from(path), &wanted, &mut first_seen) {
+            eprintln!("cannot read Mempool Dumpster file {path}: {error}");
+            return ExitCode::from(1);
+        }
+    }
+    let routes = match tlm_classify::classify_propamm_routes(&txs, &period, &first_seen) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("PropAMM route classification failed: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let sandwiches = match tlm_classify::find_propamm_sandwiches(&events, &txs) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("PropAMM sandwich search failed: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    for (path, result) in [(&out, write_ndjson(&out, &routes)), (&sandwiches_out, write_ndjson(&sandwiches_out, &sandwiches))] {
+        if let Err(error) = result {
+            eprintln!("cannot write {}: {error}", path.display());
+            return ExitCode::from(1);
+        }
+    }
+    println!("wrote {} PropAMM transaction routes and {} sandwiches", routes.len(), sandwiches.len());
+    ExitCode::SUCCESS
+}
+
+/// Read the earliest `timestamp` (Unix milliseconds) of each wanted `hash`
+/// from a Flashbots Mempool Dumpster daily Parquet file, by column name.
+fn read_dumpster_first_seen(
+    path: &PathBuf,
+    wanted: &HashSet<String>,
+    first_seen: &mut HashMap<String, u64>,
+) -> Result<(), String> {
+    let reader = xatu_reader(path)?;
+    let root = reader.metadata().file_metadata().schema();
+    let fields: Vec<_> = root
+        .get_fields()
+        .iter()
+        .filter(|field| matches!(field.name(), "hash" | "timestamp"))
+        .cloned()
+        .collect();
+    let hash = fields.iter().position(|field| field.name() == "hash").ok_or("missing column hash")?;
+    let timestamp = fields
+        .iter()
+        .position(|field| field.name() == "timestamp")
+        .ok_or("missing column timestamp")?;
+    let projection = parquet::schema::types::Type::group_type_builder(root.name())
+        .with_fields(fields)
+        .build()
+        .map_err(|e| e.to_string())?;
+    for row in reader.get_row_iter(Some(projection)).map_err(|e| e.to_string())? {
+        let row = row.map_err(|e| e.to_string())?;
+        let tx_hash = row.get_string(hash).map_err(|e| e.to_string())?.to_ascii_lowercase();
+        if !wanted.contains(&tx_hash) {
+            continue;
+        }
+        let millis = row.get_timestamp_millis(timestamp).map_err(|e| e.to_string())?;
+        let millis = u64::try_from(millis).map_err(|_| "timestamp before 1970")?;
+        first_seen
+            .entry(tx_hash)
+            .and_modify(|seen: &mut u64| *seen = (*seen).min(millis))
+            .or_insert(millis);
+    }
+    Ok(())
+}
+
 fn propamm_pair(v: Vec<String>) -> ExitCode {
     let (Some(input), Some(pairs_out), Some(blocks_out), Some(builders_out)) = (
         arg(&v, "--input"),
@@ -467,7 +879,7 @@ fn propamm_pair(v: Vec<String>) -> ExitCode {
         arg(&v, "--builders-out"),
     ) else {
         eprintln!(
-            "Usage: tembri propamm-pair --input EVENTS.ndjson --pairs-out PAIRS.ndjson --blocks-out BLOCKS.ndjson --builders-out BUILDERS.ndjson"
+            "Usage: tembri propamm-pair --input EVENTS.ndjson --pairs-out PAIRS.ndjson --blocks-out BLOCKS.ndjson --builders-out BUILDERS.ndjson [--period-blocks BLOCKS.ndjson]"
         );
         return ExitCode::from(2);
     };
@@ -478,9 +890,32 @@ fn propamm_pair(v: Vec<String>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let pairs = tlm_classify::pair_propamm_events(&events);
+    let mut pairs = tlm_classify::pair_propamm_events(&events);
     let blocks = tlm_classify::summarize_propamm_blocks(&events, &pairs);
-    let builders = tlm_classify::summarize_propamm_builders(&blocks);
+    let mut builders = tlm_classify::summarize_propamm_builders(&blocks);
+    if let Some(path) = arg(&v, "--period-blocks") {
+        let period = match read_ndjson::<tlm_model::PropammPeriodBlock>(&path) {
+            Ok(rows) => rows,
+            Err(error) => {
+                eprintln!("invalid period-block input: {error}");
+                return ExitCode::from(2);
+            }
+        };
+        builders = match tlm_classify::add_period_blocks(&builders, &period, &blocks) {
+            Ok(rows) => rows,
+            Err(error) => {
+                eprintln!("PropAMM builder summary failed: {error}");
+                return ExitCode::from(2);
+            }
+        };
+        pairs = match tlm_classify::add_quote_ages(&pairs, &period) {
+            Ok(rows) => rows,
+            Err(error) => {
+                eprintln!("PropAMM quote age failed: {error}");
+                return ExitCode::from(2);
+            }
+        };
+    }
     if let Err(error) = write_ndjson(&pairs_out, &pairs) {
         eprintln!("cannot write PropAMM pairs: {error}");
         return ExitCode::from(1);

@@ -209,6 +209,22 @@ pub struct PropammEvent {
     #[serde(default)]
     pub update_timestamp: Option<u64>,
     pub kind: PropammEventKind,
+    /// Terms of a fill decoded from the reviewed `IPropAMM.Swapped` event.
+    #[serde(default)]
+    pub fill: Option<PropammFillTerms>,
+}
+
+/// `Swapped(sender, tokenIn, tokenOut, amountIn, amountOut, recipient)` as
+/// declared by the verified `IPropAMM` interface (El Zorro, BopAmm).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropammFillTerms {
+    pub log_index: u32,
+    pub sender: String,
+    pub token_in: String,
+    pub token_out: String,
+    pub amount_in: u128,
+    pub amount_out: u128,
+    pub recipient: String,
 }
 
 /// A log projected from execution data before venue-specific decoding.
@@ -222,6 +238,11 @@ pub struct PropammLog {
     pub log_index: u32,
     pub topic0: String,
     pub builder: Option<String>,
+    /// `topic1..topic3`, as present.
+    #[serde(default)]
+    pub topics: Vec<String>,
+    #[serde(default)]
+    pub data: Option<String>,
 }
 
 /// A transaction projected from execution data for calldata-level decoding.
@@ -234,6 +255,13 @@ pub struct PropammCall {
     pub cumulative_gas_before: Gas,
     pub input: String,
     pub builder: Option<String>,
+    /// Trace position of an internal call (for example `0_1`); `None` for the
+    /// transaction's top-level call.
+    #[serde(default)]
+    pub trace_address: Option<String>,
+    /// Immediate caller of an internal call; `None` for a top-level call.
+    #[serde(default)]
+    pub from: Option<String>,
 }
 
 /// A reviewed event rule. `pool` is explicit so a registry update may later be
@@ -276,6 +304,10 @@ pub struct BytecodeGroup {
 pub enum PropammEventKind {
     Update,
     Fill,
+    /// A registry write made by a reviewed target itself from inside another
+    /// transaction (for example bopAMM writing state back during a fill). It
+    /// is not a maker quote update and is never paired.
+    TargetWrite,
 }
 
 /// The receipt-order relationship for one PropAMM fill.
@@ -293,6 +325,27 @@ pub struct PropammFillPair {
     pub transaction_gap: Option<u32>,
     pub gas_gap: Option<Gas>,
     pub fills_before_next_update: u32,
+    /// An update for this pool is in the fill's own transaction. Execution data
+    /// does not order an internal call against a log, so it is never paired.
+    #[serde(default)]
+    pub same_tx_update: bool,
+    /// Block of the latest update for this pool in an earlier transaction,
+    /// carried across blocks within the input. `None` when no such update is
+    /// in the input, which near the start of a period is censoring, not
+    /// evidence that the pool had no update.
+    #[serde(default)]
+    pub last_update_block: Option<BlockNumber>,
+    /// `block_number - last_update_block`; zero for a same-block pair.
+    #[serde(default)]
+    pub blocks_since_update: Option<u64>,
+    /// Maker-supplied timestamp of that update (registry updates only). It is
+    /// not a builder-receipt time.
+    #[serde(default)]
+    pub update_timestamp: Option<u64>,
+    /// Fill block timestamp minus `update_timestamp`, in seconds. Signed: a
+    /// maker clock may run ahead of block time.
+    #[serde(default)]
+    pub quote_age_seconds: Option<i64>,
 }
 
 /// A fill is retained even when no qualifying same-block update is observed.
@@ -315,6 +368,218 @@ pub struct PropammBlockSummary {
     pub fills: u32,
     pub paired_fills: u32,
     pub fills_without_update: u32,
+    #[serde(default)]
+    pub target_writes: u32,
+}
+
+/// One canonical block in a measurement period with its builder signal; the
+/// denominator for a builder's share of blocks.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropammPeriodBlock {
+    pub block_number: BlockNumber,
+    pub builder: Option<String>,
+    /// Block timestamp in Unix seconds.
+    #[serde(default)]
+    pub timestamp: Option<u64>,
+}
+
+/// One post-swap price of the reviewed on-chain reference pool.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ReferencePricePoint {
+    pub block_number: BlockNumber,
+    pub tx_position: u32,
+    pub log_index: u32,
+    /// Pool `sqrtPriceX96` after the swap, as emitted (`0x`-prefixed hex).
+    pub sqrt_price_x96: String,
+    /// Quote-token units per base-token unit (USDC per WETH for the reviewed pool).
+    pub price: f64,
+}
+
+/// Taker-signed markouts of one WETH/stablecoin PropAMM fill against the
+/// on-chain reference price. Positive means the taker gained (adverse
+/// selection for the maker). `ref_block_*` is the block of the reference swap
+/// behind each price, so stale references can be filtered.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PropammMarkout {
+    pub block_number: BlockNumber,
+    pub venue: String,
+    pub pool: String,
+    pub builder: Option<String>,
+    pub fill_tx_hash: String,
+    pub fill_tx_position: u32,
+    pub log_index: u32,
+    pub sender: String,
+    pub recipient: String,
+    /// `buy_weth` or `sell_weth`, from the taker's side.
+    pub taker_side: String,
+    /// `usdc` or `usdt`; USDT is priced as USDC.
+    pub stable: String,
+    pub weth_amount: f64,
+    pub stable_amount: f64,
+    /// Stablecoin per WETH.
+    pub fill_price: f64,
+    pub mid_at_fill: Option<f64>,
+    pub ref_block_at_fill: Option<BlockNumber>,
+    pub markout_0_bp: Option<f64>,
+    pub markout_1_bp: Option<f64>,
+    pub ref_block_1: Option<BlockNumber>,
+    pub markout_5_bp: Option<f64>,
+    pub ref_block_5: Option<BlockNumber>,
+    pub markout_25_bp: Option<f64>,
+    pub ref_block_25: Option<BlockNumber>,
+}
+
+/// A taker-signed markout of one WETH/stablecoin fill against a CEX trade
+/// price, 12, 4 and 2 seconds before the fill block's timestamp, at it, and
+/// 12, 60 and 300 seconds after it. The difference between horizon 0 and a
+/// negative horizon is the taker-signed price move just before the block.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PropammCexMarkout {
+    pub block_number: BlockNumber,
+    /// Fill block timestamp in Unix seconds: the horizon-0 time.
+    pub block_timestamp: u64,
+    pub venue: String,
+    pub pool: String,
+    pub builder: Option<String>,
+    pub fill_tx_hash: String,
+    pub fill_tx_position: u32,
+    pub log_index: u32,
+    pub sender: String,
+    pub recipient: String,
+    /// `buy_weth` or `sell_weth`, from the taker's side.
+    pub taker_side: String,
+    /// `usdc` or `usdt`. A USDC fill is priced as ETH/USDT divided by USDC/USDT.
+    pub stable: String,
+    pub weth_amount: f64,
+    pub stable_amount: f64,
+    /// Stablecoin per WETH.
+    pub fill_price: f64,
+    /// CEX price in the fill's stablecoin at the block timestamp.
+    pub cex_mid_at_fill: Option<f64>,
+    /// Seconds from the last ETH/USDT trade to the block timestamp.
+    pub cex_age_at_fill_s: Option<u64>,
+    pub markout_minus_12s_bp: Option<f64>,
+    pub markout_minus_4s_bp: Option<f64>,
+    pub markout_minus_2s_bp: Option<f64>,
+    pub markout_0s_bp: Option<f64>,
+    pub markout_12s_bp: Option<f64>,
+    pub markout_60s_bp: Option<f64>,
+    pub markout_300s_bp: Option<f64>,
+}
+
+/// The envelope of a transaction that emitted a reviewed PropAMM log.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropammTxEnvelope {
+    pub block_number: BlockNumber,
+    pub tx_hash: String,
+    pub tx_position: u32,
+    /// Signer.
+    pub from: String,
+    /// `None` for a contract creation.
+    pub to: Option<String>,
+    pub max_priority_fee_per_gas: Option<u64>,
+}
+
+/// How a PropAMM transaction reached its block, as far as a public-mempool
+/// archive can tell. The archive's first sighting is compared with the block
+/// timestamp (the slot start).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum PropammRoute {
+    /// First seen publicly before the block timestamp.
+    PublicBeforeBlock,
+    /// First seen publicly at or after the block timestamp: visible only
+    /// once the block was being or had been proposed.
+    SeenAfterBlockTimestamp,
+    /// Never seen by the archive.
+    NotSeenPublic,
+}
+
+/// The route of one transaction with a reviewed PropAMM log.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropammTxRoute {
+    pub block_number: BlockNumber,
+    pub tx_hash: String,
+    pub tx_position: u32,
+    pub route: PropammRoute,
+    /// Archive first-seen time, Unix milliseconds.
+    pub first_seen_ms: Option<u64>,
+    /// Block timestamp in milliseconds minus `first_seen_ms`; positive when
+    /// seen before the slot start.
+    pub lead_ms: Option<i64>,
+}
+
+/// A fill bracketed on the same pool and block by two fills of one other
+/// signer: the front in the victim's direction, the back reversed.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropammSandwich {
+    pub block_number: BlockNumber,
+    pub pool: String,
+    pub venue: String,
+    pub victim_tx_hash: String,
+    pub victim_log_index: u32,
+    pub front_tx_hash: String,
+    pub back_tx_hash: String,
+    /// Signer of the front and back transactions.
+    pub attacker: String,
+}
+
+/// A reviewed address that identifies a taker's order-flow channel.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropammTakerLabel {
+    pub address: String,
+    /// `intent_settlement`, `aggregator`, `account_abstraction` or
+    /// `batch_utility`.
+    pub class: String,
+    pub name: String,
+    pub evidence: String,
+}
+
+/// The taker class of one decoded fill.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropammTakerFill {
+    pub block_number: BlockNumber,
+    pub venue: String,
+    pub fill_tx_hash: String,
+    pub log_index: u32,
+    /// The pool's immediate caller (`Swapped.sender`).
+    pub sender: String,
+    pub tx_from: String,
+    pub tx_to: Option<String>,
+    pub class: String,
+    /// The reviewed label that set the class, if any.
+    pub label_name: Option<String>,
+}
+
+/// Mean CEX markouts of one taker class. Standard errors treat fills as
+/// independent, so they are lower bounds.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PropammTakerClassSummary {
+    pub class: String,
+    pub fills: u32,
+    pub senders: u32,
+    pub signers: u32,
+    /// Taker-signed CEX move over the 12 s before the block (bp).
+    pub pre_12s_move_bp: Option<f64>,
+    /// Share of fills with a 12 s move above 0.5 bp that traded against it.
+    pub against_move_share: Option<f64>,
+    pub markout_0s_bp: Option<f64>,
+    pub markout_0s_se: Option<f64>,
+    pub markout_12s_bp: Option<f64>,
+    pub markout_60s_bp: Option<f64>,
+    pub markout_60s_se: Option<f64>,
+    pub markout_300s_bp: Option<f64>,
+    pub markout_300s_se: Option<f64>,
+}
+
+/// The reference price at the close of each period block. A block without a
+/// swap carries the latest earlier close; `last_swap_block` says how stale.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ReferenceBlockPrice {
+    pub block_number: BlockNumber,
+    pub close: Option<f64>,
+    pub swaps: u32,
+    pub last_swap_block: Option<BlockNumber>,
 }
 
 /// Builder-attribution aggregation. Builder is an execution-data signal until
@@ -322,6 +587,10 @@ pub struct PropammBlockSummary {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PropammBuilderSummary {
     pub builder: Option<String>,
+    /// All canonical blocks this builder signal built in the period, whether
+    /// or not they carry PropAMM activity; `None` when no period was supplied.
+    #[serde(default)]
+    pub period_blocks: Option<u32>,
     pub active_blocks: u32,
     pub updates: u32,
     pub fills: u32,
@@ -381,4 +650,25 @@ pub struct LabelRow {
     pub provider_candidate: bool,
     pub delay_tolerant: bool,
     pub density: Wei,
+}
+
+/// The first time one relay received a winning block, from the relay data
+/// API (`builder_blocks_received?block_hash=`).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RelayBlockReceipt {
+    pub block_number: BlockNumber,
+    pub block_hash: String,
+    pub relay: String,
+    /// Earliest submission of this block hash, Unix milliseconds; `None`
+    /// when the relay answered but never received the block.
+    pub received_ms: Option<u64>,
+    /// Set when every attempt to query the relay failed.
+    pub error: Option<String>,
+}
+
+/// Whether a relay answered the probe before a receipt fetch.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RelayStatus {
+    pub relay: String,
+    pub error: Option<String>,
 }

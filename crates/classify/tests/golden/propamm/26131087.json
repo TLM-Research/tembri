@@ -1,0 +1,32 @@
+{
+ "block_number": 26131087,
+ "description": "Goliath fill: no reviewed update source (logs and top-level calls only)",
+ "traces": false,
+ "logs": [
+  {
+   "block_number": 26131087,
+   "emitter": "0x4367985a63063fc970b009c6e599e9225181f551",
+   "tx_hash": "0x7e3dedb56a657e89fb8ef81c3d6e77513bae15fd4b2d9582a90f7d717381b794",
+   "tx_position": 38,
+   "cumulative_gas_before": 2956184,
+   "log_index": 82,
+   "topic0": "0x1eeaa4acf3c225a4033105c2647625dbb298dec93b14e16253c4231e26c02b1d",
+   "builder": "titan (titanbuilder.xyz)",
+   "topics": [
+    "0x000000000000000000000000828ae1566824a9835acb6f565e1e9ea22bfb883a",
+    "0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+    "0x000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+   ],
+   "data": "0x00000000000000000000000000000000000000000000000000000000ee6b2800000000000000000000000000000000000000000000000000148bc6fd9c04a5ce000000000000000000000000828ae1566824a9835acb6f565e1e9ea22bfb883a"
+  }
+ ],
+ "calls": [],
+ "expected": [
+  {
+   "fill_tx_position": 38,
+   "venue": "goliath",
+   "update_tx_position": null,
+   "same_tx_update": false
+  }
+ ]
+}
