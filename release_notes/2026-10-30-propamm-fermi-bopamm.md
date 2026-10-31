@@ -90,5 +90,10 @@
   carried 67.5% of fills on 49.7% of blocks. Every block's base fee follows
   from its parent's. See
   `adr/2026-10-30-propamm-routes-golden-blocks-builders.md`.
+- P2 measurements (scratch analyses, no new command) are recorded in
+  `adr/2026-10-30-propamm-p2-spreads-gating-timing-public-swaps.md`:
+  spreads by size, volatility and builder against Uniswap V3; Metric's
+  oracle age at fills; relay sealing times; repeated updates per block; and
+  public-swap sandwich rates by size.
 - `cargo test --workspace` (59 tests) and
   `cargo clippy --workspace -- -D warnings` pass.
