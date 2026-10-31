@@ -1,0 +1,46 @@
+{
+ "block_number": 26122689,
+ "description": "bombora block",
+ "traces": true,
+ "logs": [
+  {
+   "block_number": 26122689,
+   "emitter": "0x0109aa912b58508886a2a707204b0f8c8b164ccc",
+   "tx_hash": "0xf77e3eb48422121ea434a4da417a88b9a3c8dee65e26209829df4a3eb30c06b1",
+   "tx_position": 66,
+   "cumulative_gas_before": 6339798,
+   "log_index": 196,
+   "topic0": "0x9c0210b76059007a29793536185cabba646316ffba304182459b5e2b7c00b48b",
+   "builder": "bombora.build \ud83c\udf0a",
+   "topics": [
+    "0x2eec03b8999af9793df60f1395a1b41c29e22b324ea3200ca21bc692979b9d46"
+   ],
+   "data": "0x0000000000000000000000000000000000000000000000000000003f88494a9100000000000000000000000000000000000000000000000000000000018e99c1"
+  },
+  {
+   "block_number": 26122689,
+   "emitter": "0x5979458912f80b96d30d4220af8e2e4925a33320",
+   "tx_hash": "0xca88da1d6ec3a7fcb968229df4b5312902bfd9eb3835836f088f2a428a1d6493",
+   "tx_position": 67,
+   "cumulative_gas_before": 6378254,
+   "log_index": 204,
+   "topic0": "0x1eeaa4acf3c225a4033105c2647625dbb298dec93b14e16253c4231e26c02b1d",
+   "builder": "bombora.build \ud83c\udf0a",
+   "topics": [
+    "0x0000000000000000000000009753ba22b3aeff2ab00184b66ab63bb2df485fce",
+    "0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+    "0x000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+   ],
+   "data": "0x000000000000000000000000000000000000000000000000000000014557e2760000000000000000000000000000000000000000000000001bc253ed9f1b665b0000000000000000000000009753ba22b3aeff2ab00184b66ab63bb2df485fce"
+  }
+ ],
+ "calls": [],
+ "expected": [
+  {
+   "fill_tx_position": 67,
+   "venue": "fermiswap",
+   "update_tx_position": 66,
+   "same_tx_update": false
+  }
+ ]
+}

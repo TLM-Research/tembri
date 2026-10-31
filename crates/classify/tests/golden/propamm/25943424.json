@@ -1,0 +1,32 @@
+{
+ "block_number": 25943424,
+ "description": "Metric fill: no reviewed update source (logs and top-level calls only)",
+ "traces": false,
+ "logs": [
+  {
+   "block_number": 25943424,
+   "emitter": "0xe715dc29d2c273d0fc5a03e5cca9ccb0abb1dcdb",
+   "tx_hash": "0x75c0b38e2a57cb5d43c46c544edd5b97256d532f81399fedc210429d5f57ced9",
+   "tx_position": 49,
+   "cumulative_gas_before": 6966348,
+   "log_index": 197,
+   "topic0": "0x1eeaa4acf3c225a4033105c2647625dbb298dec93b14e16253c4231e26c02b1d",
+   "builder": "titan (titanbuilder.xyz)",
+   "topics": [
+    "0x000000000000000000000000e2536231fc1512babc8c856ad7499830a936bdd9",
+    "0x000000000000000000000000a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+    "0x000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+   ],
+   "data": "0x000000000000000000000000000000000000000000000000000000000f875d0f0000000000000000000000000000000000000000000000000177499543cc274e000000000000000000000000e2536231fc1512babc8c856ad7499830a936bdd9"
+  }
+ ],
+ "calls": [],
+ "expected": [
+  {
+   "fill_tx_position": 49,
+   "venue": "metric",
+   "update_tx_position": null,
+   "same_tx_update": false
+  }
+ ]
+}
